@@ -1,0 +1,25 @@
+{
+  "name": "activities-map",
+  "version": "0.0.1",
+  "description": "Make maps from Strava and other data",
+  "main": "index.mjs",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "open http://localhost:8080  && node index.mjs"
+  },
+  "author": "Jeremy Hubble",
+  "license": "ISC",
+  "dependencies": {
+    "@mapbox/togeojson": "^0.16.2",
+    "express": "^4.18.2",
+    "geojson": "^0.5.0",
+    "gpxparser": "^3.0.8",
+    "leaflet": "^1.9.4",
+    "simplify-geojson": "^1.0.5",
+    "strava-v3": "^2.2.0",
+    "xmldom": "^0.6.0"
+  },
+  "devDependencies": {
+    "http-server": "^14.1.1"
+  }
+}

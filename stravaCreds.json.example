@@ -1,0 +1,5 @@
+{
+  "access_token": "STRAVA_ACCESS_TOKEN",
+  "client_id"     : "STRAVA_CLIENT_ID",
+  "client_secret" : "STRAVA_CLIENT_SECRET"
+}
