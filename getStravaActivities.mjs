@@ -75,16 +75,16 @@ export const getStuff = async ({ type = '', checkForNewer = false, location = {}
 	console.log("Updated location:",location);
 	console.log(`Getting activities of type: ${type}`);
 	try {
-		let payload;
+		let payload = {};
 		let last=0;
 
 		// If we already have an activity list file and we are trying to get data, 
 		// back up the file and try to find the most recent timestamp
 		if (fs.existsSync(ACTIVITY_LIST_CACHE_FILE)) {
+			console.log("Already have cache file");
 			try {
+				payload = JSON.parse(fs.readFileSync(ACTIVITY_LIST_CACHE_FILE));
 				if (checkForNewer && checkForNewer !== 'false') {
-					payload = JSON.parse(fs.readFileSync(ACTIVITY_LIST_CACHE_FILE));
-					fs.renameSync(ACTIVITY_LIST_CACHE_FILE,`${ACTIVITY_LIST_CACHE_FILE}.${Date.now()}`);
 					last = new Date(payload[0].start_date)/1000;
 				}
 			}
@@ -103,10 +103,12 @@ export const getStuff = async ({ type = '', checkForNewer = false, location = {}
 				return b['start_date_local'].localeCompare(a['start_date_local']);
 			});
 			payload = payload.filter((e,i,a) => e?.id !== a[i-1]?.id);
-			fs.writeFileSync(ACTIVITY_LIST_CACHE_FILE,JSON.stringify(payload,null,1));
-		}
-		else {
-			payload = await getTrackListPage({fromStamp: fromStamp, toStamp: toStamp});
+			try {
+				fs.renameSync(ACTIVITY_LIST_CACHE_FILE,`${ACTIVITY_LIST_CACHE_FILE}.${Date.now()}`);
+			}
+			catch (e) {
+				console.error("unable to rename old file",ACTIVITY_LIST_CACHE_FILE);
+			}
 			fs.writeFileSync(ACTIVITY_LIST_CACHE_FILE,JSON.stringify(payload,null,1));
 		}
 		console.log("Number of activities:",payload.length);
