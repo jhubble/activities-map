@@ -14,7 +14,7 @@ const OPTIONS = {
 	type: Object.keys(TYPES),
 	checkForNewer: [true, false],
 	includePrivate: [false, true],
-	fromStamp: '',
+	fromStamp: '1705301451',
 	toStamp: '',
 	center_lat: { name:"Center Latitude", key:"location_center_lat", default:config.default_latitude},
 	center_lng: { name:"Center Longitude", key:"location_center_long", default:config.default_longitude},
