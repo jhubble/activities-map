@@ -14,7 +14,7 @@ const OPTIONS = {
 	type: Object.keys(TYPES),
 	checkForNewer: [true, false],
 	includePrivate: [false, true],
-	fromStamp: '1705301451',
+	fromStamp: {default:'1705301451',note:"e.g. 1694822400 is 2023-09-16"},
 	toStamp: '',
 	center_lat: { name:"Center Latitude", key:"location_center_lat", default:config.default_latitude},
 	center_lng: { name:"Center Longitude", key:"location_center_long", default:config.default_longitude},
@@ -39,7 +39,7 @@ const processOption = (optionKey, optionValue) => {
 	}
 	// An opject has explicit name, value and default
 	if (typeof optionValue === 'object') {
-		let html = `<label>${optionValue?.name}</label>:<input type="text" name="${optionValue?.['key']}" value="${optionValue?.default}"></input>`;
+		let html = `<label>${optionValue?.name || optionKey}</label>:<input type="text" name="${optionValue?.['key'] || optionKey}" value="${optionValue?.default}"></input><span>${optionValue?.note}</span>`;
 		return html;
 	}
 }
