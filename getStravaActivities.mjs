@@ -52,7 +52,27 @@ const getTrackListPage = async ({page=1, trackList=[], fromStamp=0, toStamp=Math
 	return trackList;
 }
 
-export const getStuff = async ({ type = '', checkForNewer = false, location = {}, includePrivate=false, fromStamp, toStamp, token } = {}) => {
+const compareTrackMetaData = (oldTrack, newTrack) => {
+	const oldKeys = Object.keys(oldTrack);
+	const newKeys = Object.keys(newTrack);
+	if (oldKeys.length !== newKeys.length) {
+		console.log("different key length in track arrays",oldKeys.length, newKeys.length);
+		return false;
+	}
+	return oldKeys.some(oldKey => {
+		// Don't update just because kudos changed
+		if (oldKey === 'kudos_count' || oldKey === 'has_kudoed') {
+			return false;
+		}
+		const oldVal = JSON.stringify(oldTrack[oldKey]);
+		const newVal = JSON.stringify(newTrack[oldKey]);
+		if (oldVal !== newVal) {
+			console.log(`${oldTrack.id} ${oldTrack.name} ${oldKey} is different: ${oldVal} != ${newVal}`);
+			return true;
+		}
+	});
+}
+export const getStuff = async ({ type = '', checkForNewer = false, location = {}, includePrivate=false, fromStamp, toStamp, token, refresh = false } = {}) => {
 	// If we have non-numeric in date, try to convert it
 	if (fromStamp && /\D/.test(fromStamp.trim())) {
 		fromStamp = (new Date(fromStamp))/1000;
@@ -93,9 +113,6 @@ export const getStuff = async ({ type = '', checkForNewer = false, location = {}
 			console.log("Already have cache file");
 			try {
 				payload = JSON.parse(fs.readFileSync(ACTIVITY_LIST_CACHE_FILE));
-				if (checkForNewer && checkForNewer !== 'false') {
-					last = new Date(payload[0].start_date)/1000;
-				}
 			}
 			catch(e) {
 				console.error("Error processing activity list cache. Recreating.",e);
@@ -103,8 +120,58 @@ export const getStuff = async ({ type = '', checkForNewer = false, location = {}
 		}
 
 		// get new data
-		if (checkForNewer && checkForNewer !== 'false') {
+		
+		// Refresh is similar, but different from check for newer
+		if (refresh && refresh !== 'false') {
+			console.log("Refreshing from time range");
+			const payloadMap = {};
+			payload.forEach((el,index) => {
+				payloadMap[el.id] = index;
+			});
+
+			const endTime = toStamp || Date.now()/1000;
+			const newPayload = await getTrackListPage({fromStamp:fromStamp, toStamp: endTime});
+			// Use for loop for async
+			for (let i=0; i< newPayload.length; i++) {
+				const activity = newPayload[i];
+				const id = activity.id;
+				const oldActivityIndex = payloadMap[id];
+				if (oldActivityIndex !== undefined) {
+					const oldActivity = payload[oldActivityIndex];
+					if (compareTrackMetaData(oldActivity, activity)) {
+						console.log("Changes, so updating metadata and redownloading");
+						payload[oldActivityIndex] = activity;
+						await processActivity(activity,true);
+					}
+				}
+				else {
+					console.log("Does not exist. Downloading and adding");
+					payload.push(activity);
+					fullActivity = await processActivity(activity,true);
+				}
+			};
+			// Properly sort and filter - since new ones will show up at end
+			// We want newest first
+			payload = payload.sort((a,b) => {
+				return b['start_date_local'].localeCompare(a['start_date_local']);
+			});
+			payload = payload.filter((e,i,a) => e?.id !== a[i-1]?.id);
+			try {
+				fs.renameSync(ACTIVITY_LIST_CACHE_FILE,`${ACTIVITY_LIST_CACHE_FILE}.${Date.now()}`);
+			}
+			catch (e) {
+				console.error("unable to rename old file",ACTIVITY_LIST_CACHE_FILE);
+			}
+			fs.writeFileSync(ACTIVITY_LIST_CACHE_FILE,JSON.stringify(payload,null,1));
+		}
+		else if (checkForNewer && checkForNewer !== 'false') {
 			console.log("Last timestamp:",last);
+			try {
+				last = Math.floor(new Date(payload[0].start_date)/1000);
+			}
+			catch(e) {
+				console.error("could not get date",e);
+			}
 			payload = await getTrackListPage({trackList:payload, fromStamp:last});
 			// Properly sort and filter - since new ones will show up at end
 			// We want newest first
@@ -202,7 +269,8 @@ const processActivities = async ({payload, type, location={}, includePrivate=fal
 	return kmlTracks;
 }
 
-const processActivity = async (activity) => {
+const processActivity = async (activity, force=false) => {
+	// force will force redownload even if cache exists
 
 	// Interesting fields:
 	// name: name of activity
@@ -217,18 +285,18 @@ const processActivity = async (activity) => {
 	const id = activity.id;
 	const trackCacheFile = `${CACHE_DIR}/${id}.json`;
 	let stream = null;
-	if (fs.existsSync(trackCacheFile)) {
+	if (!force && fs.existsSync(trackCacheFile)) {
 		const file = fs.readFileSync(trackCacheFile);
 		stream = JSON.parse(file);
 	}
 	else {
 		if (called > MAX_TRACKS) {
 			++skipped;
-			console.error(`Not downloading because ${called} exceeds ${MAX_TRACKS}, skipped: ${skipped}`);
+			console.error(`Not downloading ${id} because ${called} exceeds ${MAX_TRACKS}, skipped: ${skipped}`);
 		}
 		else if (!activity.hasOwnProperty('start_latlng') || !activity.start_latlng.length) {
 			++skipped
-			console.error(`Not downloading because no start lat_lng (skipped: ${skipped})`);
+			console.error(`Not downloading ${id} because no start lat_lng (skipped: ${skipped})`);
 		}
 		else {
 			++called;
