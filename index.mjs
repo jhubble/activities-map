@@ -14,7 +14,8 @@ const OPTIONS = {
 	type: Object.keys(TYPES),
 	checkForNewer: [true, false],
 	includePrivate: [false, true],
-	fromStamp: {default:'1705301451',note:"e.g. 1694822400 is 2023-09-16"},
+	refresh: {values: [false, true], note: 'Re-read all metadata and reload those that are changed'},
+	fromStamp: {default:'2024-01-15',note:"time parsable by JS in locale or unix timestamp (1694822400 is 2023-09-16)"},
 	toStamp: '',
 	center_lat: { name:"Center Latitude", key:"location_center_lat", default:config.default_latitude},
 	center_lng: { name:"Center Longitude", key:"location_center_long", default:config.default_longitude},
@@ -23,23 +24,39 @@ const OPTIONS = {
 	tiles: ['osm','none']
 };
 
+const outputLabel = (optionKey, name) => {
+	return `<label>${name || optionKey}</label>:`;
+}
+
+const outputArrayValues = (optionKey, optionValue, name) => {
+	let html = outputLabel(optionKey,name);
+	html +=`<select name="${optionKey}">`;
+	html += optionValue.map(k => `<option value="${k}">${k}</option>`);
+	html += "</select>";
+	return html;
+}
 const processOption = (optionKey, optionValue) => {
 	// If it is an array, it is list of values, default to first
 	// name is key
 	if (Array.isArray(optionValue)) {
-		let html = `<label>${optionKey}</label><select name="${optionKey}">`;
-		html += optionValue.map(k => `<option value="${k}">${k}</option>`);
-		html += "</select>";
-		return html;
+		return outputArrayValues(optionKey, optionValue);
 	}
 	// If it is a string, it is an input field with value as default
 	if (typeof optionValue === 'string') {
 		let html = `<label>${optionKey}</label>: <input type="text" name="${optionKey}" value="${optionValue}"></input>`;
 		return html;
 	}
-	// An opject has explicit name, value and default
+	// An opject has explicit name, value and default (and maybe values for list)
 	if (typeof optionValue === 'object') {
-		let html = `<label>${optionValue?.name || optionKey}</label>:<input type="text" name="${optionValue?.['key'] || optionKey}" value="${optionValue?.default}"></input><span>${optionValue?.note}</span>`;
+		let html = ''
+		if (Array.isArray(optionValue?.values)) {
+			html += outputArrayValues(optionKey, optionValue.values, optionValue?.name);
+		}
+		else {
+			html = outputLabel(optionKey, optionValue?.name);
+			html += `<input type="text" name="${optionValue?.['key'] || optionKey}" value="${optionValue?.default}"></input>`;
+		}
+		html += `<span>${optionValue?.note || ''}</span>`;
 		return html;
 	}
 }
@@ -143,7 +160,8 @@ const getMapHtml = ({kml = '', lat, long, tiles = 'osm' } = {}) => {
                                 fetch('/geojson/'+kml).then(function (response) {
                                         response.text().then((geojson) => {
                                                 const geojsonJSON = JSON.parse(geojson);
-                                                document.getElementById('mapinfo').innerHTML = 'Number of tracks: '+geojsonJSON.features.length;
+						const header = 'Number of tracks: '+geojsonJSON.features.length+' <a href="javascript:history.back()">go back</a>';
+                                                document.getElementById('mapinfo').innerHTML = header;
                                                 function onEachFeature(feature, layer) {
                                                     if (feature.properties && feature.properties.name) {
                                                         layer.bindPopup(feature.properties.name);
@@ -161,7 +179,7 @@ const getMapHtml = ({kml = '', lat, long, tiles = 'osm' } = {}) => {
                                 });
                         }
 
-                </script>
+	</script>
 	`;
 	return leaflet;
 		return "foo";

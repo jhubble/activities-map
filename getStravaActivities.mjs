@@ -53,6 +53,15 @@ const getTrackListPage = async ({page=1, trackList=[], fromStamp=0, toStamp=Math
 }
 
 export const getStuff = async ({ type = '', checkForNewer = false, location = {}, includePrivate=false, fromStamp, toStamp, token } = {}) => {
+	// If we have non-numeric in date, try to convert it
+	if (fromStamp && /\D/.test(fromStamp.trim())) {
+		fromStamp = (new Date(fromStamp))/1000;
+		console.log("fromStamp converted: ",fromStamp);
+	}
+	if (toStamp && /\D/.test(toStamp.trim())) {
+		toStamp = (new Date(toStamp))/1000;
+		console.log("toStamp converted: ",toStamp);
+	}
 	console.log("TOKEN:",token);
 	if (token) {
 		// This was initially initialized in module scope
