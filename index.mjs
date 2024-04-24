@@ -182,7 +182,6 @@ const getMapHtml = ({kml = '', lat, long, tiles = 'osm' } = {}) => {
 	</script>
 	`;
 	return leaflet;
-		return "foo";
 }
 
 
@@ -235,13 +234,17 @@ app.get('/process', async (request, response) => {
 	const long = opts.location_center_long || config.default_longitude;
 	console.log("options: ",opts);
 	const data = await getStuff(opts);
-	const kmlFileName =  `output_${Date.now()}.kml`;
-	const fname = `${__dirname}/out/${kmlFileName}`;
-	let outputFilePath = outputFile(data, fname);
-	let html = `Download <a href="${kmlFileName}">${kmlFileName}</a>`;
-	html += getMapHtml({kml:kmlFileName, lat:lat, long: long, tiles:opts.tiles});
-
-	response.send(html);
+	if (!data) {
+		response.send('No data  found <a href="javascript:history.back()">go back</a>');
+	}
+	else {
+		const kmlFileName =  `output_${Date.now()}.kml`;
+		const fname = `${__dirname}/out/${kmlFileName}`;
+		let outputFilePath = outputFile(data, fname);
+		let html = `Download <a href="${kmlFileName}">${kmlFileName}</a>`;
+		html += getMapHtml({kml:kmlFileName, lat:lat, long: long, tiles:opts.tiles});
+		response.send(html);
+	}
 });
 
 app.listen(port, () => {
