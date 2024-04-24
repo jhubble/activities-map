@@ -53,11 +53,12 @@ const getTrackListPage = async ({page=1, trackList=[], fromStamp=0, toStamp=Math
 }
 
 const compareTrackMetaData = (oldTrack, newTrack) => {
+	// true means they are different
 	const oldKeys = Object.keys(oldTrack);
 	const newKeys = Object.keys(newTrack);
 	if (oldKeys.length !== newKeys.length) {
 		console.log("different key length in track arrays",oldKeys.length, newKeys.length);
-		return false;
+		return true;
 	}
 	return oldKeys.some(oldKey => {
 		// Don't update just because kudos changed
@@ -145,9 +146,14 @@ export const getStuff = async ({ type = '', checkForNewer = false, location = {}
 					}
 				}
 				else {
-					console.log("Does not exist. Downloading and adding");
+					console.log(`"${id}" Does not exist. Downloading and adding`);
 					payload.push(activity);
-					fullActivity = await processActivity(activity,true);
+					try {
+						fullActivity = await processActivity(activity,true);
+					}
+					catch (e) {
+						console.error(`Error with process activity for ${id}`,e);
+					}
 				}
 			};
 			// Properly sort and filter - since new ones will show up at end
