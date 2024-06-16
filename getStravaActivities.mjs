@@ -14,6 +14,7 @@ import simplify from 'simplify-geojson';
  */
 	
 
+// usually overwritten by param value
 const TOLERANCE = config.tolerance || .6;
 
 stravaApi.config({client_id:config.client_id, client_secret:config.client_secret, redirect_uri:config.redirect_uri});
@@ -73,7 +74,11 @@ const compareTrackMetaData = (oldTrack, newTrack) => {
 		}
 	});
 }
-export const getStuff = async ({ type = '', checkForNewer = false, location = {}, includePrivate=false, fromStamp, toStamp, token, refresh = false } = {}) => {
+export const getStuff = async ({ type = '', checkForNewer = false, location = {}, includePrivate=false, fromStamp, toStamp, token, tolerance, refresh = false } = {}) => {
+	console.log("TOLERANCE",tolerance);
+	if (!tolerance) {
+		tolerance = null;
+	}
 	// If we have non-numeric in date, try to convert it
 	if (fromStamp && /\D/.test(fromStamp.trim())) {
 		fromStamp = (new Date(fromStamp))/1000;
@@ -142,14 +147,14 @@ export const getStuff = async ({ type = '', checkForNewer = false, location = {}
 					if (compareTrackMetaData(oldActivity, activity)) {
 						console.log("Changes, so updating metadata and redownloading");
 						payload[oldActivityIndex] = activity;
-						await processActivity(activity,true);
+						await processActivity(activity,true,tolerance);
 					}
 				}
 				else {
 					console.log(`"${id}" Does not exist. Downloading and adding`);
 					payload.push(activity);
 					try {
-						fullActivity = await processActivity(activity,true);
+						fullActivity = await processActivity(activity,true,tolerance);
 					}
 					catch (e) {
 						console.error(`Error with process activity for ${id}`,e);
@@ -194,7 +199,7 @@ export const getStuff = async ({ type = '', checkForNewer = false, location = {}
 			fs.writeFileSync(ACTIVITY_LIST_CACHE_FILE,JSON.stringify(payload,null,1));
 		}
 		console.log("Number of activities:",payload.length);
-		const trackData = await processActivities({payload:payload, type:type, location:location, includePrivate:includePrivate, fromStamp: fromStamp,toStamp:toStamp});
+		const trackData = await processActivities({payload:payload, type:type, location:location, includePrivate:includePrivate, fromStamp: fromStamp,toStamp:toStamp, tolerance:tolerance});
 		return printKml.head("tracks")+trackData+printKml.tail(config.default_latitude,config.default_longitude);
 	}
 	catch (e) {
@@ -202,7 +207,7 @@ export const getStuff = async ({ type = '', checkForNewer = false, location = {}
 	};
 }
 
-const processActivities = async ({payload, type, location={}, includePrivate=false, fromStamp, toStamp}) => {
+const processActivities = async ({payload, type, location={}, includePrivate=false, fromStamp, toStamp, tolerance}) => {
 	let error = 0;
 	let kmlTracks = '';
 	let desiredActivities = payload;
@@ -254,7 +259,7 @@ const processActivities = async ({payload, type, location={}, includePrivate=fal
 	await Promise.all(desiredActivities.map(async (activity) => {
 		if (!error) {
 			try {
-				const trackData = await processActivity(activity);
+				const trackData = await processActivity(activity,false,tolerance);
 				kmlTracks += trackData;
 			}
 			catch (e) {
@@ -275,7 +280,7 @@ const processActivities = async ({payload, type, location={}, includePrivate=fal
 	return kmlTracks;
 }
 
-const processActivity = async (activity, force=false) => {
+const processActivity = async (activity, force=false, tolerance=TOLERANCE) => {
 	// force will force redownload even if cache exists
 
 	// Interesting fields:
@@ -313,7 +318,7 @@ const processActivity = async (activity, force=false) => {
 	}
 	
 	if (stream) {
-		const coordinates = TOLERANCE ? simplifyTrack(stream[0].data) :
+		const coordinates = tolerance ? simplifyTrack(stream[0].data, tolerance) :
 			stream[0].data.map(latlng => {
 				return `${latlng[1]},${latlng[0]},0`;
 			})
@@ -358,12 +363,12 @@ export const getAuthToken = (code) => {
 	});
 }
 
-const simplifyTrack = (data) => {
+const simplifyTrack = (data, tolerance) => {
 	try {
 		// must flip lat/lng before geojsoning
 		const toParse = [{line: data.map(point => [point[1],point[0]])}];
 		const geoJsonTrack = geoJSON.parse(toParse, {'LineString': 'line'});
-		const simple = simplify(geoJsonTrack, TOLERANCE / 10000 );
+		const simple = simplify(geoJsonTrack, tolerance / 10000 );
 		const coordinates = simple.features[0].geometry.coordinates
 			.map((point) => { // only have lat and long
 				return `${point[0]},${point[1]},0`

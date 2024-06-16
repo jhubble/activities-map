@@ -21,7 +21,8 @@ const OPTIONS = {
 	center_lng: { name:"Center Longitude", key:"location_center_long", default:config.default_longitude},
 	lat_dist: { name:"Latitude distance", key:"location_distance_lat", default:config.location_distance_lat},
 	long_dist: { name:"Longitude distance", key:"location_distance_long", default:config.location_distance_long},
-	tiles: ['osm','none']
+	tiles: ['osm','none'],
+	tolerance: { default: config.tolerance, name:"Tolerance", key:"tolerance", note:"higher number=lower accuracy, smaller file. .5-1 is best, 10 is one city block, 0 is no smoothing"} 
 };
 
 const outputLabel = (optionKey, name) => {
