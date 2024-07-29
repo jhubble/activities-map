@@ -56,7 +56,8 @@ export default {
         Run: ["Run"],
         Hike: ["Hike"],
         Walk: ["Walk"],
-        All: null
+        All: null,
+	Bike_Foot: ["Run","Walk","Hike","Ride"]
   },
   ...stravaCreds,
 }
