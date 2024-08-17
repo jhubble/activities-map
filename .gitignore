@@ -7,6 +7,9 @@ node_modules/
 # Credentials
 stravaCreds.json
 
-$ cache and output
+# cache and output
 cache/
 out/
+
+# misc
+.DS_Store
