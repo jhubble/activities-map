@@ -117,7 +117,9 @@ const getOptionForm = (token) => {
 	output += `<p>fromStamp and toStamp or minutes from epoch. (e.g. Date.now()/1000)</p>`;
 	output += `<p>Distances are degrees from center (plus or minus)</p>`;
 	output += `<p>Check For Newer will call strava for more, otherwise, cache will be used</p>`;
-	output += `<input type="submit"></form>`;
+	output += `<input type="submit" value="Generate Map">`;
+	output += `<input type="submit" formaction="/stats" value="Show Stats">`;
+	output += `</form>`;
 	output += `<p><strong>The first time run with "Check For Newer" it will download all track information. This can take a long time.</strong>. Later calls will just get items newer than available.</p>`; 
 
 	return output;
@@ -221,10 +223,7 @@ app.use(express.static('out'));
 // leaflet source files
 app.use('/leaflet', express.static('node_modules/leaflet/dist'))
 
-
-// process will take lines from query string
-app.get('/process', async (request, response) => {
-
+const _getInitialData = async (request,response) => {
 	let opts = request.query;
 	if (opts.location_distance_lat && opts.location_distance_long) {
 		opts.location = { center : [opts.location_center_lat, opts.location_center_long],
@@ -233,20 +232,79 @@ app.get('/process', async (request, response) => {
 	}
 	const lat = opts.location_center_lat || config.default_latitude;
 	const long = opts.location_center_long || config.default_longitude;
-	console.log("options: ",opts);
+	//console.log("options: ",opts);
 	const data = await getStuff(opts);
+	//console.log("DATA",data);
 	if (!data) {
 		response.send('No data  found <a href="javascript:history.back()">go back</a>');
+		return false;
 	}
 	else {
-		const kmlFileName =  `output_${Date.now()}.kml`;
-		const fname = `${__dirname}/out/${kmlFileName}`;
-		let outputFilePath = outputFile(data, fname);
-		let html = `Download <a href="${kmlFileName}">${kmlFileName}</a>`;
-		html += getMapHtml({kml:kmlFileName, lat:lat, long: long, tiles:opts.tiles});
+		return { data, opts, lat, long };
+	}
+}
+
+// process will take lines from query string
+app.get('/process', async (request, response) => {
+	const result = await _getInitialData(request, response);
+	if (result) {
+		const {data,opts,lat,long} = result;
+		const kmlTrack = data.kmlTrack;
+		if (!kmlTrack) {
+			response.send('No data  found <a href="javascript:history.back()">go back</a>');
+		}
+		else {
+			const kmlFileName =  `output_${Date.now()}.kml`;
+			const fname = `${__dirname}/out/${kmlFileName}`;
+			let outputFilePath = outputFile(kmlTrack, fname);
+			let html = `Download <a href="${kmlFileName}">${kmlFileName}</a>`;
+			html += getMapHtml({kml:kmlFileName, lat:lat, long: long, tiles:opts.tiles});
+			response.send(html);
+		}
+	}
+});
+
+app.get('/stats', async (request, response) => {
+	console.log("STATS");
+	const req = {...request};
+	req.query.stats = true;
+	const result = await _getInitialData(req, response);
+	if (result) {
+		const {data,opts,lat,long} = result;
+		const {activities} = data;
+		let elapsed = 0;
+		let earliest = null;
+		let latest = null;
+		activities.forEach(track => {
+			elapsed += track.elapsed_time;
+			const startDate = Date.parse(track.start_date);
+			if (earliest === null || startDate < earliest) {
+				earliest = startDate;
+			}
+			if (latest === null || startDate > latest) {
+				latest = startDate;
+			}
+		});
+		//console.log("DATA",data);
+		//console.log("OPTS",opts);
+		const days = (latest-earliest)/1000/60/60/24;
+		const hours = elapsed/60/60;
+		let html =  "<p>Stats</p>";
+		html += '<a href="javascript:history.back()">go back</a>';
+
+		html += `<p>Total time: ${Number.parseFloat(hours).toFixed(2)} hours</p>`;
+		html += `<p>Activites : ${activities.length}</p>`;
+		html += `<p>First     : ${new Date(earliest).toLocaleString()}</p>`;
+		html += `<p>Last      : ${new Date(latest).toLocaleString()}</p>`;
+		html += `<p>Days      : ${Number.parseFloat(days).toFixed(2)} days</p>`
+		html += `<p>Hours/Day : ${Number.parseFloat(hours/days).toFixed(2)} hours</p>`
+		html += `<p>Actvities/Day : ${Number.parseFloat(activities.length/days).toFixed(2)} activities</p>`
 		response.send(html);
 	}
 });
+
+
+
 
 app.listen(port, () => {
   console.log(`activities-map listening at http://localhost:${port}`)

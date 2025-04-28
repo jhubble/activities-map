@@ -199,8 +199,10 @@ export const getStuff = async ({ type = '', checkForNewer = false, location = {}
 			fs.writeFileSync(ACTIVITY_LIST_CACHE_FILE,JSON.stringify(payload,null,1));
 		}
 		console.log("Number of activities:",payload.length);
-		const trackData = await processActivities({payload:payload, type:type, location:location, includePrivate:includePrivate, fromStamp: fromStamp,toStamp:toStamp, tolerance:tolerance});
-		return printKml.head("tracks")+trackData+printKml.tail(config.default_latitude,config.default_longitude);
+		const {trackData,activities} = await processActivities({payload:payload, type:type, location:location, includePrivate:includePrivate, fromStamp: fromStamp,toStamp:toStamp, tolerance:tolerance});
+		// return raw track data and kmlTrack
+		const kmlTrack = printKml.head("tracks")+trackData+printKml.tail(config.default_latitude,config.default_longitude);
+		return {activities, kmlTrack}
 	}
 	catch (e) {
 		console.error("error",e)
@@ -277,7 +279,7 @@ const processActivities = async ({payload, type, location={}, includePrivate=fal
 			console.error("Not making request",error, "total skipped:",skipped);
 		}
 	}))
-	return kmlTracks;
+	return {trackData:kmlTracks,activities:desiredActivities};
 }
 
 const processActivity = async (activity, force=false, tolerance=TOLERANCE) => {
