@@ -16,6 +16,7 @@ let printKml = require('./kmlExport');
 const tolerance = .6;
 
 const processGpx = (fname) => {
+	//console.error("PROCESS GPX:",fname);
 	const gpxData = fs.readFileSync(fname).toString();
 	var gpx = new gpxParser(); //Create gpxParser Object
 
@@ -35,12 +36,12 @@ const processGpx = (fname) => {
 	//console.log(printKml.head(name));
 
 	let geoJSON = gpx.toGeoJSON();
-	//console.log(geoJSON.features[0].geometry);
+	//console.error("GEOJSON geometry",geoJSON.features[0].geometry);
 
 
 	const simple = simplify(geoJSON,tolerance / 10000);
 
-	//console.log("SIMPLE",simple.features[0].geometry);
+	//console.error("SIMPLE",simple.features[0].geometry);
 	coordinates = simple.features[0].geometry.coordinates
 		.map((point) => { // only have lat and long
 			return `${point[0]},${point[1]},0`

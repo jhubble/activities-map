@@ -261,6 +261,7 @@ const processActivities = async ({payload, type, location={}, includePrivate=fal
 	await Promise.all(desiredActivities.map(async (activity) => {
 		if (!error) {
 			try {
+				//console.error("Processing activity:",activity);
 				const trackData = await processActivity(activity,false,tolerance);
 				kmlTracks += trackData;
 			}
@@ -301,6 +302,7 @@ const processActivity = async (activity, force=false, tolerance=TOLERANCE) => {
 	if (!force && fs.existsSync(trackCacheFile)) {
 		const file = fs.readFileSync(trackCacheFile);
 		stream = JSON.parse(file);
+		//console.error("FILE",file.toString());
 	}
 	else {
 		if (called > MAX_TRACKS) {
@@ -320,8 +322,11 @@ const processActivity = async (activity, force=false, tolerance=TOLERANCE) => {
 	}
 	
 	if (stream) {
-		const coordinates = tolerance ? simplifyTrack(stream[0].data, tolerance) :
-			stream[0].data.map(latlng => {
+		// The gpx contains an array of different type items. 
+		// they can be in any order
+		const latlngList = stream.find(list => list.type === 'latlng');
+		const coordinates = tolerance ? simplifyTrack(latlngList.data, tolerance) :
+			latlngList.data.map(latlng => {
 				return `${latlng[1]},${latlng[0]},0`;
 			})
 			.join(' ');
