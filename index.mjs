@@ -299,6 +299,7 @@ app.get('/stats', async (request, response) => {
 		html += `<p>Days      : ${Number.parseFloat(days).toFixed(2)} days</p>`
 		html += `<p>Hours/Day : ${Number.parseFloat(hours/days).toFixed(2)} hours</p>`
 		html += `<p>Actvities/Day : ${Number.parseFloat(activities.length/days).toFixed(2)} activities</p>`
+		html += `<p>Yearly Estimate: ${Number.parseFloat((hours/days)*365).toFixed(2)} hours</p>`;
 		response.send(html);
 	}
 });
