@@ -269,6 +269,7 @@ app.get('/stats', async (request, response) => {
 	const req = {...request};
 	req.query.stats = true;
 	const result = await _getInitialData(req, response);
+	const badGear = [];
 	if (result) {
 		const {data,opts,lat,long} = result;
 		const {activities} = data;
@@ -284,6 +285,10 @@ app.get('/stats', async (request, response) => {
 			if (latest === null || startDate > latest) {
 				latest = startDate;
 			}
+			if (track.gear_id === 'b11740548' || track.gear_id === 'g8082193') {
+				badGear.push(track);
+			}
+
 		});
 		//console.log("DATA",data);
 		//console.log("OPTS",opts);
@@ -300,6 +305,8 @@ app.get('/stats', async (request, response) => {
 		html += `<p>Hours/Day : ${Number.parseFloat(hours/days).toFixed(2)} hours</p>`
 		html += `<p>Actvities/Day : ${Number.parseFloat(activities.length/days).toFixed(2)} activities</p>`
 		html += `<p>Yearly Estimate: ${Number.parseFloat((hours/days)*365).toFixed(2)} hours</p>`;
+		const tracksWithMissingGear = badGear.map(track => {return `<a target="_blank" href="https://www.strava.com/activities/${track.id}">${track.name}</a><br />`; }).join('') || 'None';
+		html += `<p>Tracks with missing gear:</p> ${tracksWithMissingGear}`;
 		response.send(html);
 	}
 });

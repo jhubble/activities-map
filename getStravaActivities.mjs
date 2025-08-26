@@ -325,6 +325,11 @@ const processActivity = async (activity, force=false, tolerance=TOLERANCE) => {
 		// The gpx contains an array of different type items. 
 		// they can be in any order
 		const latlngList = stream.find(list => list.type === 'latlng');
+		if (!latlngList) {
+			console.error(`no lat lng for activity: ${activity.id}: ${activity.name}`);
+			return ;
+		}
+
 		const coordinates = tolerance ? simplifyTrack(latlngList.data, tolerance) :
 			latlngList.data.map(latlng => {
 				return `${latlng[1]},${latlng[0]},0`;
