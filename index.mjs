@@ -264,21 +264,38 @@ app.get('/process', async (request, response) => {
 	}
 });
 
+const getDaysInMonth = (monthYearStr) => {
+  const [monthStr, yearStr] = monthYearStr.split(' ');
+  const month = new Date(`${monthStr} 1, ${yearStr}`).getMonth(); // convert month name to month index
+  const year = parseInt(yearStr, 10);
+
+  // Create a date for the first day of the next month, then subtract 1 day
+  return new Date(year, month + 1, 0).getDate();
+}
+
 app.get('/stats', async (request, response) => {
 	console.log("STATS");
 	const req = {...request};
 	req.query.stats = true;
 	const result = await _getInitialData(req, response);
 	const badGear = [];
+	const types = {};
+	const buckets = {};
 	if (result) {
 		const {data,opts,lat,long} = result;
 		const {activities} = data;
 		let elapsed = 0;
+		let moving = 0;
 		let earliest = null;
 		let latest = null;
 		activities.forEach(track => {
 			elapsed += track.elapsed_time;
+			moving += track.moving_time;
 			const startDate = Date.parse(track.start_date);
+			const bucket = new Date(track.start_date).toLocaleString('default',{month: 'short', year: 'numeric'});
+			buckets[bucket] = (buckets[bucket] || 0) + track.elapsed_time;
+
+			types[track.type] = (types[track.type] || 0) + 1;
 			if (earliest === null || startDate < earliest) {
 				earliest = startDate;
 			}
@@ -294,7 +311,8 @@ app.get('/stats', async (request, response) => {
 		//console.log("OPTS",opts);
 		const days = (latest-earliest)/1000/60/60/24;
 		const hours = elapsed/60/60;
-		let html =  "<p>Stats</p>";
+		const moving_hours = moving/60/60;
+		let html =  "<h1>Stats</h1>";
 		html += '<a href="javascript:history.back()">go back</a>';
 
 		html += `<p>Total time: ${Number.parseFloat(hours).toFixed(2)} hours</p>`;
@@ -303,10 +321,31 @@ app.get('/stats', async (request, response) => {
 		html += `<p>Last      : ${new Date(latest).toLocaleString()}</p>`;
 		html += `<p>Days      : ${Number.parseFloat(days).toFixed(2)} days</p>`
 		html += `<p>Hours/Day : ${Number.parseFloat(hours/days).toFixed(2)} hours</p>`
+		html += `<p>Moving Hours/Day : ${Number.parseFloat(moving_hours/days).toFixed(2)} hours</p>`
 		html += `<p>Actvities/Day : ${Number.parseFloat(activities.length/days).toFixed(2)} activities</p>`
 		html += `<p>Yearly Estimate: ${Number.parseFloat((hours/days)*365).toFixed(2)} hours</p>`;
+		html += `<p>Yearly Moving Estimate: ${Number.parseFloat((moving_hours/days)*365).toFixed(2)} hours</p>`;
 		const tracksWithMissingGear = badGear.map(track => {return `<a target="_blank" href="https://www.strava.com/activities/${track.id}">${track.name}</a><br />`; }).join('') || 'None';
-		html += `<p>Tracks with missing gear:</p> ${tracksWithMissingGear}`;
+		html += `\n<h2>Tracks with missing gear:</h2>\n ${tracksWithMissingGear}`;
+		html += `\n<h2>Types</h2>\n<table><thead><tr><th>type</th><th>activities</th></tr></thead><tbody>`;
+		html += Object.keys(types)
+			.sort((a,b) => { return types[a] - types[b]})
+			.map(type => {
+				return `<tr><td>${type}</td><td>${types[type]}</td></tr>`;
+			})
+			.join('\n');
+		html += `</tbody></table>`;
+		html += `\n<h2>Monthly stats (hours elapsed time)</h2>`;
+		html += `\n<table><thead><tr><th>Month</th><th>Total</th><th>Daily Average</th></tr></thead><tbody>`;
+		html += Object.keys(buckets)
+			.sort((a,b) => { return new Date(a) - new Date(b)})
+			.map(bucket => {
+				return `<tr><td>${bucket}</td>`
+					+`<td>${Number.parseFloat(buckets[bucket]/60/60).toFixed(2)}</td>`
+					+`<td>${Number.parseFloat((buckets[bucket]/60/60) / getDaysInMonth(bucket)).toFixed(2)}</td></tr>`;
+			})
+			.join('\n');
+		html += `</tbody></table>`;
 		response.send(html);
 	}
 });
