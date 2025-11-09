@@ -1,4 +1,6 @@
 import express from 'express';
+import {packageDirectorySync} from 'package-directory';
+import { logger } from './loggerSetup.mjs';
 import { dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { TYPES, getAuthURL, getAuthToken, getStuff, outputFile } from './getStravaActivities.mjs';
@@ -6,9 +8,12 @@ import { getGeoJsonFromFile, getGeoJsonFromString } from './kmlToGeoJson.mjs';
 import config from './config.mjs';
 import fs from 'fs';
 
+logger.info("starting app");
 const app = express();
 const port = config.run_on_port || 8080;
-const __dirname = dirname(fileURLToPath(import.meta.url));
+const __dirname = packageDirectorySync();
+
+logger.trace("dirname:",__dirname);
 
 const OPTIONS = {
 	type: Object.keys(TYPES),
@@ -104,7 +109,7 @@ app.get('/', (request, response) => {
 // If we get here without authenticating, the "checkForNewer" default flag is flipped
 
 const getOptionForm = (token) => {
-	console.log("Token:",token);
+	logger.info("Token:",token);
 	let options = JSON.parse(JSON.stringify(OPTIONS));
 	// Default to not use strava api if we don't have token
 	if (!token) {
@@ -178,7 +183,7 @@ const getMapHtml = ({kml = '', lat, long, tiles = 'osm' } = {}) => {
                                         });
                                 }).catch(function (error) {
                                         // There was an error
-                                        console.warn(error);
+                                        logger.error(error);
                                 });
                         }
 
@@ -207,7 +212,7 @@ app.get('/map/:kml?', (request, response) => {
 app.get('/geojson/:outfile', (request, response) => {
 	let outfile = request.params.outfile;
 	if (/^output_\d+\.kml$/.test(outfile)) {
-		console.log("outfile:",outfile);
+		logger.info("outfile:",outfile);
 		outfile = `${__dirname}/out/${outfile}`;
 		const geoJson = getGeoJsonFromFile(outfile);
 		response.send(geoJson);
@@ -232,9 +237,9 @@ const _getInitialData = async (request,response) => {
 	}
 	const lat = opts.location_center_lat || config.default_latitude;
 	const long = opts.location_center_long || config.default_longitude;
-	//console.log("options: ",opts);
+	logger.trace("options: ",opts);
 	const data = await getStuff(opts);
-	//console.log("DATA",data);
+	logger.trace("DATA",data);
 	if (!data) {
 		response.send('No data  found <a href="javascript:history.back()">go back</a>');
 		return false;
@@ -274,7 +279,7 @@ const getDaysInMonth = (monthYearStr) => {
 }
 
 app.get('/stats', async (request, response) => {
-	console.log("STATS");
+	logger.info("STATS");
 	const req = {...request};
 	req.query.stats = true;
 	const result = await _getInitialData(req, response);
@@ -307,8 +312,8 @@ app.get('/stats', async (request, response) => {
 			}
 
 		});
-		//console.log("DATA",data);
-		//console.log("OPTS",opts);
+		logger.trace("DATA",data);
+		logger.trace("OPTS",opts);
 		const days = (latest-earliest)/1000/60/60/24;
 		const hours = elapsed/60/60;
 		const moving_hours = moving/60/60;
@@ -354,5 +359,5 @@ app.get('/stats', async (request, response) => {
 
 
 app.listen(port, () => {
-  console.log(`activities-map listening at http://localhost:${port}`)
+  logger.info(`activities-map listening at http://localhost:${port}`)
 })

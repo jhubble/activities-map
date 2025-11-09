@@ -10,6 +10,8 @@ stravaCreds.json
 # cache and output
 cache/
 out/
+logs/
 
 # misc
 .DS_Store
+*.swp

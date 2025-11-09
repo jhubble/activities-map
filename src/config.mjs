@@ -1,12 +1,20 @@
 import fs from 'fs';
+import { logger } from './loggerSetup.mjs';
+import {packageDirectorySync} from 'package-directory';
+import { fileURLToPath } from 'url';
+
 
 // This is the public config file
 // Config parameters can be added here
 // However, any credentials should only be added to stravaCreds (and not checked in)
 
-const CREDS = 'stravaCreds.json';
+const dirname = packageDirectorySync();
+logger.trace("dirname",dirname);
+const CREDS = `${dirname}/stravaCreds.json`;
 let stravaCreds = {};
+logger.info("Creds file:",CREDS);
 if (fs.existsSync(CREDS)) {
+	logger.debug("Reading Strava Creds from:",CREDS);
 	stravaCreds = JSON.parse(fs.readFileSync(CREDS));
 }
 	
@@ -38,8 +46,8 @@ export default {
   "tolerance":  .6,
 
   // directories - relative to current directory or absolute
-  "cache_dir" : "cache",
-  "output_dir" : "out",
+  "cache_dir" : `${dirname}/cache`,
+  "output_dir" : `${dirname}/out`,
 
   // maximum number of tracks to download at a time from strava
   // should be under maximum 15 minute Strava limit
