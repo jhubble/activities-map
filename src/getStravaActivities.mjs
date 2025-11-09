@@ -356,9 +356,10 @@ export const outputFile = (data, fileName=`${OUTPUT_DIR}/output_${Date.now()}.km
 	return fileName;
 }
 
-export const getAuthURL = () => {
+export const getAuthURL = (post = "code") => {
 	logger.info("getting auth URL");
-	const stravaConfig = {client_id:config.client_id, redirect_uri: `${config.redirect_uri}/code`};
+	const stravaConfig = {client_id:config.client_id, redirect_uri: `${config.redirect_uri}/${post}`};
+
 	logger.trace("Config:",stravaConfig);
 	stravaApi.config(stravaConfig);
 	const authURL = stravaApi.oauth.getRequestAccessURL({scope:"read,activity:read_all"});

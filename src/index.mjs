@@ -1,7 +1,7 @@
 import express from 'express';
 import {packageDirectorySync} from 'package-directory';
 import { logger } from './loggerSetup.mjs';
-import { dirname } from 'path';
+import path from 'path';
 import { fileURLToPath } from 'url';
 import { TYPES, getAuthURL, getAuthToken, getStuff, outputFile } from './getStravaActivities.mjs';
 import { getGeoJsonFromFile, getGeoJsonFromString } from './kmlToGeoJson.mjs';
@@ -108,7 +108,8 @@ app.get('/', (request, response) => {
 // /code is where we paste the code after authentication with strava
 // If we get here without authenticating, the "checkForNewer" default flag is flipped
 
-const getOptionForm = (token) => {
+const getOptionForm = (token, refresh=false) => {
+	const auth_url = getAuthURL("coderefresh");
 	logger.info("Token:",token);
 	let options = JSON.parse(JSON.stringify(OPTIONS));
 	// Default to not use strava api if we don't have token
@@ -116,9 +117,11 @@ const getOptionForm = (token) => {
 		options.checkForNewer = [false,true];
 	}
 	const htmlOptions = processOptions(options);
-	let output = `<form action="/process" method="get">`;
+	let output = `<form id="myForm" action="/process" method="get">`;
 	output += htmlOptions;
-	output += `<br>Strava token:<input type="text" name="token" value="${token || ''}"></input><br>`;
+	output += `<br>Strava token:<input type="text" name="token" value="${token || ''}"></input>`;
+	output += `<a id="refresh" onclick="saveFormData()" href="${auth_url}">Auth with Strava</a>`;
+	output += `<br>`;
 	output += `<p>fromStamp and toStamp or minutes from epoch. (e.g. Date.now()/1000)</p>`;
 	output += `<p>Distances are degrees from center (plus or minus)</p>`;
 	output += `<p>Check For Newer will call strava for more, otherwise, cache will be used</p>`;
@@ -127,8 +130,16 @@ const getOptionForm = (token) => {
 	output += `</form>`;
 	output += `<p><strong>The first time run with "Check For Newer" it will download all track information. This can take a long time.</strong>. Later calls will just get items newer than available.</p>`; 
 
+	output += `<script src="/formClient.js"></script>`;
+	if (refresh) {
+		output += `<script>restoreFormData()</script>`;
+	}
 	return output;
 }
+app.get('/formClient.js', (req, res) => {
+	logger.info("serving form client");
+  res.sendFile(path.join(__dirname, 'src/formClient.js'));
+});
 app.get('/code', (request, response) => {
 	const code = request?.query?.code;
 	if (!code) {
@@ -137,6 +148,22 @@ app.get('/code', (request, response) => {
 	else {
 		getAuthToken(code).then( token => {
 			response.send(getOptionForm(token));
+		})
+		.catch( (e) => {
+			response.send(getOptionForm());
+		});
+	}
+
+});
+
+app.get('/coderefresh', (request, response) => {
+	const code = request?.query?.code;
+	if (!code) {
+		response.send(getOptionForm());
+	}
+	else {
+		getAuthToken(code).then( token => {
+			response.send(getOptionForm(token,true));
 		})
 		.catch( (e) => {
 			response.send(getOptionForm());
