@@ -1,6 +1,8 @@
 import pkg from 'log4js';
 const { configure, getLogger } = pkg;
 
+const LOG_LEVEL = 'debug';
+
 // Configuration Block
 configure({
     appenders: {
@@ -21,7 +23,7 @@ configure({
     },
     categories: {
         // Default logger for general application use
-	    default: { appenders: ['console'], level: 'info', enableCallStack: true },
+	    default: { appenders: ['console'], level: LOG_LEVEL, enableCallStack: true },
         // Specific logger for database interactions
 //        database: { appenders: ['appFile', 'console'], level: 'debug' } 
     }

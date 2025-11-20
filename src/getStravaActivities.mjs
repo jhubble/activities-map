@@ -33,8 +33,20 @@ if (!fs.existsSync(OUTPUT_DIR)) {
 }
 const MAX_TRACKS = config.max_tracks_at_a_time || 550;
 
+const API_RESET_TIME = config.API_RESET_TIME || 15;
 let called = 0;
 let skipped = 0;
+let calledTime = Date.now();
+
+const checkAPIInterval = () => {
+	const calledInterval = (Date.now() - calledTime)/(1000*60);
+	logger.debug("Minutes since called count started ",calledInterval);
+	if (calledInterval > API_RESET_TIME) {
+		logger.info("restarting API count count");
+		called = 0;
+		calledTime = Date.now();
+	}
+}
 
 export const TYPES = config.activity_types;
 
@@ -43,6 +55,7 @@ const getTrackListPage = async ({page=1, trackList=[], fromStamp=0, toStamp=Math
 	logger.info("Page:",page,"activities:",trackList.length, "from:",fromStamp, "to:",toStamp);
 	try {
 		const payload = await strava.athlete.listActivities({id:373707, after:fromStamp, before: toStamp, per_page: 200, page: page})
+		called += 1;
 		if (payload.length) {
 			trackList.push(...payload);
 			trackList = await getTrackListPage({page:page+1,trackList:trackList, fromStamp:fromStamp, toStamp: toStamp });
@@ -76,6 +89,7 @@ const compareTrackMetaData = (oldTrack, newTrack) => {
 	});
 }
 export const getStuff = async ({ type = '', checkForNewer = false, location = {}, includePrivate=false, fromStamp, toStamp, token, tolerance, refresh = false } = {}) => {
+	checkAPIInterval();
 	logger.info("TOLERANCE",tolerance);
 	if (!tolerance) {
 		tolerance = null;
@@ -212,12 +226,14 @@ export const getStuff = async ({ type = '', checkForNewer = false, location = {}
 	};
 }
 
+
 const processActivities = async ({payload, type, location={}, includePrivate=false, fromStamp, toStamp, tolerance}) => {
+	checkAPIInterval();
 	let error = 0;
 	let kmlTracks = '';
 	let desiredActivities = payload;
 	const searchType = TYPES[type];
-	logger.error(`Initial activities: ${payload.length}`);
+	logger.info(`Initial activities: ${payload.length}`);
 
 	// filter the activities
 	if (searchType) {
@@ -283,11 +299,14 @@ const processActivities = async ({payload, type, location={}, includePrivate=fal
 			logger.info("Not making request",error, "total skipped:",skipped);
 		}
 	}))
+	console.info(`Skipped tracks: ${skipped}`);
+	console.info(`API Calls: ${called}`);
 	return {trackData:kmlTracks,activities:desiredActivities};
 }
 
 const processActivity = async (activity, force=false, tolerance=TOLERANCE) => {
 	logger.trace("Activity:",activity);
+	checkAPIInterval();
 	// force will force redownload even if cache exists
 
 	// Interesting fields:
@@ -313,14 +332,15 @@ const processActivity = async (activity, force=false, tolerance=TOLERANCE) => {
 	else {
 		if (called > MAX_TRACKS) {
 			++skipped;
-			logger.error(`Not downloading ${id} because ${called} exceeds ${MAX_TRACKS}, skipped: ${skipped}`);
+			logger.warn(`Not downloading ${id} because ${called} exceeds ${MAX_TRACKS}, skipped: ${skipped}`);
 		}
 		else if (!Object.hasOwn(activity,'start_latlng') || !activity.start_latlng.length) {
 			++skipped
-			logger.error(`Not downloading ${id} because no start lat_lng (skipped: ${skipped})`);
+			logger.warn(`Not downloading ${id} because no start lat_lng (skipped: ${skipped})`);
 		}
 		else {
 			++called;
+			logger.debug(`API Calls: ${called}`);
 			stream = await strava.streams.activity({id:activity.id, types:'time,distance,latlng', resolution:'medium'});
 			fs.writeFileSync(trackCacheFile,JSON.stringify(stream,null,1));
 			logger.info("Wrote file",trackCacheFile);

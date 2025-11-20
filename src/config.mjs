@@ -3,6 +3,7 @@ import { logger } from './loggerSetup.mjs';
 import {packageDirectorySync} from 'package-directory';
 import { fileURLToPath } from 'url';
 
+// Log level is defined in loggerSetup.mjs
 
 // This is the public config file
 // Config parameters can be added here
@@ -54,6 +55,9 @@ export default {
   // will need to rerun 15 minutes later to continue building cache
   "max_tracks_at_a_time" : 550,
 
+  // interval in minutes when the API counter resets
+  API_RESET_TIME : 15,
+
   // Different types of activities to download
   // Key is the name that will appear in form
   // The value is an array of different strava event types
@@ -67,5 +71,6 @@ export default {
         All: null,
 	Bike_Foot: ["Run","Walk","Hike","Ride"]
   },
+  
   ...stravaCreds,
 }
