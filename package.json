@@ -19,7 +19,7 @@
     "log4js": "^6.9.1",
     "package-directory": "^8.1.0",
     "simplify-geojson": "^1.0.5",
-    "strava-v3": "^2.2.0",
+    "strava-v3": "^2.2.1",
     "xmldom": "^0.6.0"
   },
   "devDependencies": {
