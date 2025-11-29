@@ -313,6 +313,7 @@ app.get('/stats', async (request, response) => {
 	const badGear = [];
 	const types = {};
 	const buckets = {};
+	const dayBuckets = {};
 	if (result) {
 		const {data,opts,lat,long} = result;
 		const {activities} = data;
@@ -325,7 +326,9 @@ app.get('/stats', async (request, response) => {
 			moving += track.moving_time;
 			const startDate = Date.parse(track.start_date);
 			const bucket = new Date(track.start_date).toLocaleString('default',{month: 'short', year: 'numeric'});
+			const dayBucket = new Date(track.start_date).toLocaleString('default',{day: 'numeric', month: 'short', year: 'numeric'});
 			buckets[bucket] = (buckets[bucket] || 0) + track.elapsed_time;
+			dayBuckets[dayBucket] = (dayBuckets[dayBucket] || 0) + track.elapsed_time;
 
 			types[track.type] = (types[track.type] || 0) + 1;
 			if (earliest === null || startDate < earliest) {
@@ -375,6 +378,26 @@ app.get('/stats', async (request, response) => {
 				return `<tr><td>${bucket}</td>`
 					+`<td>${Number.parseFloat(buckets[bucket]/60/60).toFixed(2)}</td>`
 					+`<td>${Number.parseFloat((buckets[bucket]/60/60) / getDaysInMonth(bucket)).toFixed(2)}</td></tr>`;
+			})
+			.join('\n');
+		html += `</tbody></table>`;
+		html += `\n<h2>Daily stats (hours elapsed time)</h2>`;
+	html += `\n<table><thead><tr><th>Date</th><th>Daily</th><th>Year to Date</th></tr></thead><tbody>`;
+		let year =0;
+		let yearCount = 0;
+		html += Object.keys(dayBuckets)
+			.sort((a,b) => { return new Date(a) - new Date(b)})
+			.map(bucket => {
+				const currentYear = new Date(bucket).getFullYear();
+				if (year != currentYear) {
+					year = currentYear;
+					yearCount = 0;
+				}
+				yearCount += dayBuckets[bucket];
+				return `<tr><td>${bucket}</td>`
+					+`<td>${Number.parseFloat(dayBuckets[bucket]/60/60).toFixed(2)}</td>`
+					+`<td>${Number.parseFloat(yearCount/60/60).toFixed(2)}</td>`
+					+`</tr>`;
 			})
 			.join('\n');
 		html += `</tbody></table>`;
