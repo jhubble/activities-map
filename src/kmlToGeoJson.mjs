@@ -1,7 +1,7 @@
 import tj from '@mapbox/togeojson';
 import { logger } from './loggerSetup.mjs';
 import fs from 'fs';
-import { DOMParser } from 'xmldom';
+import { DOMParser } from '@xmldom/xmldom';
 
 export const getGeoJsonFromFile = (kmlfile) => {
 	logger.debug("geoJson from file",kmlfile);
