@@ -5,7 +5,9 @@
   "main": "index.mjs",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "open http://localhost:8080  && node index.mjs"
+    "start": "node src/index.mjs",
+    "startpage": "open http://localhost:8080 && node src/index.mjs",
+    "lint": "eslint 'src/**/*.{js,mjs}'"
   },
   "author": "Jeremy Hubble",
   "license": "ISC",
@@ -15,11 +17,18 @@
     "geojson": "^0.5.0",
     "gpxparser": "^3.0.8",
     "leaflet": "^1.9.4",
+    "log4js": "^6.9.1",
+    "package-directory": "^8.1.0",
     "simplify-geojson": "^1.0.5",
     "strava-v3": "^2.2.0",
     "xmldom": "^0.6.0"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "eslint": "^8.57.1",
+    "eslint-config-airbnb-base": "^15.0.0",
+    "eslint-plugin-import": "^2.32.0",
+    "globals": "^16.5.0",
     "http-server": "^14.1.1"
   }
 }

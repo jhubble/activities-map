@@ -1,4 +1,5 @@
 import stravaApi from "strava-v3";
+import { logger } from './loggerSetup.mjs';
 import config from './config.mjs';
 import printKml from './kmlExport.js';
 import fs from 'fs';
@@ -23,32 +24,45 @@ const CACHE_DIR = config.cache_dir;
 const OUTPUT_DIR = config.output_dir;
 const ACTIVITY_LIST_CACHE_FILE = `${CACHE_DIR}/allActivities.json`;
 if (!fs.existsSync(CACHE_DIR)) {
-	console.log("Creating cache dir:",CACHE_DIR);
+	logger.info("Creating cache dir:",CACHE_DIR);
 	fs.mkdirSync(CACHE_DIR);
 }
 if (!fs.existsSync(OUTPUT_DIR)) {
-	console.log("Creating output dir:",OUTPUT_DIR);
+	logger.info("Creating output dir:",OUTPUT_DIR);
 	fs.mkdirSync(OUTPUT_DIR);
 }
 const MAX_TRACKS = config.max_tracks_at_a_time || 550;
 
+const API_RESET_TIME = config.API_RESET_TIME || 15;
 let called = 0;
 let skipped = 0;
+let calledTime = Date.now();
+
+const checkAPIInterval = () => {
+	const calledInterval = (Date.now() - calledTime)/(1000*60);
+	logger.debug("Minutes since called count started ",calledInterval);
+	if (calledInterval > API_RESET_TIME) {
+		logger.info("restarting API count count");
+		called = 0;
+		calledTime = Date.now();
+	}
+}
 
 export const TYPES = config.activity_types;
 
 // Recursively get all activities within a time range
 const getTrackListPage = async ({page=1, trackList=[], fromStamp=0, toStamp=Math.ceil(Date.now()/1000)} = {}) => {
-	console.log("Page:",page,"activities:",trackList.length, "from:",fromStamp, "to:",toStamp);
+	logger.info("Page:",page,"activities:",trackList.length, "from:",fromStamp, "to:",toStamp);
 	try {
 		const payload = await strava.athlete.listActivities({id:373707, after:fromStamp, before: toStamp, per_page: 200, page: page})
+		called += 1;
 		if (payload.length) {
 			trackList.push(...payload);
 			trackList = await getTrackListPage({page:page+1,trackList:trackList, fromStamp:fromStamp, toStamp: toStamp });
 		}
 	}
 	catch (e) {
-		console.error("ERROR getting list:",e);
+		logger.error("ERROR getting list:",e);
 	}
 	return trackList;
 }
@@ -58,7 +72,7 @@ const compareTrackMetaData = (oldTrack, newTrack) => {
 	const oldKeys = Object.keys(oldTrack);
 	const newKeys = Object.keys(newTrack);
 	if (oldKeys.length !== newKeys.length) {
-		console.log("different key length in track arrays",oldKeys.length, newKeys.length);
+		logger.info("different key length in track arrays",oldKeys.length, newKeys.length);
 		return true;
 	}
 	return oldKeys.some(oldKey => {
@@ -69,26 +83,27 @@ const compareTrackMetaData = (oldTrack, newTrack) => {
 		const oldVal = JSON.stringify(oldTrack[oldKey]);
 		const newVal = JSON.stringify(newTrack[oldKey]);
 		if (oldVal !== newVal) {
-			console.log(`${oldTrack.id} ${oldTrack.name} ${oldKey} is different: ${oldVal} != ${newVal}`);
+			logger.info(`${oldTrack.id} ${oldTrack.name} ${oldKey} is different: ${oldVal} != ${newVal}`);
 			return true;
 		}
 	});
 }
 export const getStuff = async ({ type = '', checkForNewer = false, location = {}, includePrivate=false, fromStamp, toStamp, token, tolerance, refresh = false } = {}) => {
-	console.log("TOLERANCE",tolerance);
+	checkAPIInterval();
+	logger.info("TOLERANCE",tolerance);
 	if (!tolerance) {
 		tolerance = null;
 	}
 	// If we have non-numeric in date, try to convert it
 	if (fromStamp && /\D/.test(fromStamp.trim())) {
 		fromStamp = (new Date(fromStamp))/1000;
-		console.log("fromStamp converted: ",fromStamp);
+		logger.info("fromStamp converted: ",fromStamp);
 	}
 	if (toStamp && /\D/.test(toStamp.trim())) {
 		toStamp = (new Date(toStamp))/1000;
-		console.log("toStamp converted: ",toStamp);
+		logger.info("toStamp converted: ",toStamp);
 	}
-	console.log("TOKEN:",token);
+	logger.info("TOKEN:",token);
 	if (token) {
 		// This was initially initialized in module scope
 		strava = new stravaApi.client(token);
@@ -107,8 +122,9 @@ export const getStuff = async ({ type = '', checkForNewer = false, location = {}
 		}
 	}
 
-	console.log("Updated location:",location);
-	console.log(`Getting activities of type: ${type}`);
+	logger.info("Updated location:",location);
+	logger.info(`Getting activities of type: ${type}`);
+	logger.trace(`Cache File: ${ACTIVITY_LIST_CACHE_FILE}`);
 	try {
 		let payload = {};
 		let last=0;
@@ -116,12 +132,12 @@ export const getStuff = async ({ type = '', checkForNewer = false, location = {}
 		// If we already have an activity list file and we are trying to get data, 
 		// back up the file and try to find the most recent timestamp
 		if (fs.existsSync(ACTIVITY_LIST_CACHE_FILE)) {
-			console.log("Already have cache file");
+			logger.info("Already have cache file");
 			try {
 				payload = JSON.parse(fs.readFileSync(ACTIVITY_LIST_CACHE_FILE));
 			}
 			catch(e) {
-				console.error("Error processing activity list cache. Recreating.",e);
+				logger.error("Error processing activity list cache. Recreating.",e);
 			}
 		}
 
@@ -129,7 +145,7 @@ export const getStuff = async ({ type = '', checkForNewer = false, location = {}
 		
 		// Refresh is similar, but different from check for newer
 		if (refresh && refresh !== 'false') {
-			console.log("Refreshing from time range");
+			logger.info("Refreshing from time range");
 			const payloadMap = {};
 			payload.forEach((el,index) => {
 				payloadMap[el.id] = index;
@@ -140,24 +156,25 @@ export const getStuff = async ({ type = '', checkForNewer = false, location = {}
 			// Use for loop for async
 			for (let i=0; i< newPayload.length; i++) {
 				const activity = newPayload[i];
+				logger.trace("Activity",activity);
 				const id = activity.id;
 				const oldActivityIndex = payloadMap[id];
 				if (oldActivityIndex !== undefined) {
 					const oldActivity = payload[oldActivityIndex];
 					if (compareTrackMetaData(oldActivity, activity)) {
-						console.log("Changes, so updating metadata and redownloading");
+						logger.info("Changes, so updating metadata and redownloading");
 						payload[oldActivityIndex] = activity;
 						await processActivity(activity,true,tolerance);
 					}
 				}
 				else {
-					console.log(`"${id}" Does not exist. Downloading and adding`);
+					logger.info(`"${id}" Does not exist. Downloading and adding`);
 					payload.push(activity);
 					try {
 						fullActivity = await processActivity(activity,true,tolerance);
 					}
 					catch (e) {
-						console.error(`Error with process activity for ${id}`,e);
+						logger.error(`Error with process activity for ${id}`,e);
 					}
 				}
 			};
@@ -171,17 +188,17 @@ export const getStuff = async ({ type = '', checkForNewer = false, location = {}
 				fs.renameSync(ACTIVITY_LIST_CACHE_FILE,`${ACTIVITY_LIST_CACHE_FILE}.${Date.now()}`);
 			}
 			catch (e) {
-				console.error("unable to rename old file",ACTIVITY_LIST_CACHE_FILE);
+				logger.error("unable to rename old file",ACTIVITY_LIST_CACHE_FILE);
 			}
 			fs.writeFileSync(ACTIVITY_LIST_CACHE_FILE,JSON.stringify(payload,null,1));
 		}
 		else if (checkForNewer && checkForNewer !== 'false') {
-			console.log("Last timestamp:",last);
+			logger.info("Last timestamp:",last);
 			try {
 				last = Math.floor(new Date(payload[0].start_date)/1000);
 			}
 			catch(e) {
-				console.error("could not get date",e);
+				logger.error("could not get date",e);
 			}
 			payload = await getTrackListPage({trackList:payload, fromStamp:last});
 			// Properly sort and filter - since new ones will show up at end
@@ -194,66 +211,68 @@ export const getStuff = async ({ type = '', checkForNewer = false, location = {}
 				fs.renameSync(ACTIVITY_LIST_CACHE_FILE,`${ACTIVITY_LIST_CACHE_FILE}.${Date.now()}`);
 			}
 			catch (e) {
-				console.error("unable to rename old file",ACTIVITY_LIST_CACHE_FILE);
+				logger.error("unable to rename old file",ACTIVITY_LIST_CACHE_FILE);
 			}
 			fs.writeFileSync(ACTIVITY_LIST_CACHE_FILE,JSON.stringify(payload,null,1));
 		}
-		console.log("Number of activities:",payload.length);
+		logger.info("Number of activities:",payload.length);
 		const {trackData,activities} = await processActivities({payload:payload, type:type, location:location, includePrivate:includePrivate, fromStamp: fromStamp,toStamp:toStamp, tolerance:tolerance});
 		// return raw track data and kmlTrack
 		const kmlTrack = printKml.head("tracks")+trackData+printKml.tail(config.default_latitude,config.default_longitude);
 		return {activities, kmlTrack}
 	}
 	catch (e) {
-		console.error("error",e)
+		logger.error("error",e)
 	};
 }
 
+
 const processActivities = async ({payload, type, location={}, includePrivate=false, fromStamp, toStamp, tolerance}) => {
+	checkAPIInterval();
 	let error = 0;
 	let kmlTracks = '';
 	let desiredActivities = payload;
 	const searchType = TYPES[type];
-	console.error(`Initial activities: ${payload.length}`);
+	logger.info(`Initial activities: ${payload.length}`);
 
 	// filter the activities
 	if (searchType) {
 		desiredActivities = desiredActivities.filter(activity => {
 			return (searchType.indexOf(activity.type) !== -1);
 		});
-		console.error(`Desired by type: ${desiredActivities.length}`);
+		logger.info(`Desired by type: ${desiredActivities.length}`);
 	}
 	if (!includePrivate || includePrivate === 'false') {
 		desiredActivities = desiredActivities.filter(activity => {
 			return (!activity.private);
 		});
-		console.log(`Desired after excluding private: ${desiredActivities.length}`);
+		logger.info(`Desired after excluding private: ${desiredActivities.length}`);
 	}
 	if (location.min) {
 		desiredActivities = desiredActivities.filter(activity => {
 			return ((activity.start_latlng[0] > location.min[0]) && 
 				(activity.start_latlng[1] > location.min[1]))
 		})
-		console.log(`Desired by min latlng: ${desiredActivities.length}`);
+		logger.info(`Desired by min latlng: ${desiredActivities.length}`);
 	}
 	if (location.max) {
 		desiredActivities = desiredActivities.filter(activity => {
 			return ((activity.start_latlng[0] < location.max[0]) && 
 				(activity.start_latlng[1] < location.max[1]))
 		})
-		console.log(`Desired by max latlng: ${desiredActivities.length}`);
+		logger.info(`Desired by max latlng: ${desiredActivities.length}`);
 	}
 	if (fromStamp) {
 		desiredActivities = desiredActivities.filter(activity => {
 			return ((new Date(activity.start_date)/1000) >= fromStamp)
 		})
-		console.log(`Desired by after fromStamp: ${desiredActivities.length}`);
+		logger.info(`Desired by after fromStamp: ${desiredActivities.length}`);
 	}
 	if (toStamp) {
 		desiredActivities = desiredActivities.filter(activity => {
 			return ((new Date(activity.start_date)/1000) <= toStamp)
 		})
-		console.log(`Desired by after toStamp: ${desiredActivities.length}`);
+		logger.info(`Desired by after toStamp: ${desiredActivities.length}`);
 	}
 
 	// Get the track listing for each activity
@@ -261,29 +280,33 @@ const processActivities = async ({payload, type, location={}, includePrivate=fal
 	await Promise.all(desiredActivities.map(async (activity) => {
 		if (!error) {
 			try {
-				//console.error("Processing activity:",activity);
+				logger.trace("Processing activity:",activity);
 				const trackData = await processActivity(activity,false,tolerance);
 				kmlTracks += trackData;
 			}
 			catch (e) {
 				++skipped;
 				if (e?.statusCode !== 404) {
-					console.error("process activity error. Aborting future requests:",e);
+					logger.error("process activity error. Aborting future requests:",e);
 					++error;
 				}
 				else {
-					console.error("404 error:",activity.id,activity.name,e?.statusCode,e?.options);
+					logger.error("404 error:",activity.id,activity.name,e?.statusCode,e?.options);
 				}
 			}
 		}
 		else {
-			console.error("Not making request",error, "total skipped:",skipped);
+			logger.info("Not making request",error, "total skipped:",skipped);
 		}
 	}))
+	console.info(`Skipped tracks: ${skipped}`);
+	console.info(`API Calls: ${called}`);
 	return {trackData:kmlTracks,activities:desiredActivities};
 }
 
 const processActivity = async (activity, force=false, tolerance=TOLERANCE) => {
+	logger.trace("Activity:",activity);
+	checkAPIInterval();
 	// force will force redownload even if cache exists
 
 	// Interesting fields:
@@ -298,26 +321,29 @@ const processActivity = async (activity, force=false, tolerance=TOLERANCE) => {
 	// private: (boolean)
 	const id = activity.id;
 	const trackCacheFile = `${CACHE_DIR}/${id}.json`;
+	logger.debug("track cache file",trackCacheFile);
 	let stream = null;
 	if (!force && fs.existsSync(trackCacheFile)) {
+		logger.debug("reading cache file",trackCacheFile);
 		const file = fs.readFileSync(trackCacheFile);
 		stream = JSON.parse(file);
-		//console.error("FILE",file.toString());
+		logger.trace("FILE",file.toString());
 	}
 	else {
 		if (called > MAX_TRACKS) {
 			++skipped;
-			console.error(`Not downloading ${id} because ${called} exceeds ${MAX_TRACKS}, skipped: ${skipped}`);
+			logger.warn(`Not downloading ${id} because ${called} exceeds ${MAX_TRACKS}, skipped: ${skipped}`);
 		}
-		else if (!activity.hasOwnProperty('start_latlng') || !activity.start_latlng.length) {
+		else if (!Object.hasOwn(activity,'start_latlng') || !activity.start_latlng.length) {
 			++skipped
-			console.error(`Not downloading ${id} because no start lat_lng (skipped: ${skipped})`);
+			logger.warn(`Not downloading ${id} because no start lat_lng (skipped: ${skipped})`);
 		}
 		else {
 			++called;
+			logger.debug(`API Calls: ${called}`);
 			stream = await strava.streams.activity({id:activity.id, types:'time,distance,latlng', resolution:'medium'});
 			fs.writeFileSync(trackCacheFile,JSON.stringify(stream,null,1));
-			console.warn("Wrote file",trackCacheFile);
+			logger.info("Wrote file",trackCacheFile);
 		}
 	}
 	
@@ -326,7 +352,7 @@ const processActivity = async (activity, force=false, tolerance=TOLERANCE) => {
 		// they can be in any order
 		const latlngList = stream.find(list => list.type === 'latlng');
 		if (!latlngList) {
-			console.error(`no lat lng for activity: ${activity.id}: ${activity.name}`);
+			logger.warn(`no lat lng for activity: ${activity.id}: ${activity.name}`);
 			return ;
 		}
 
@@ -346,18 +372,22 @@ const processActivity = async (activity, force=false, tolerance=TOLERANCE) => {
 
 export const outputFile = (data, fileName=`${OUTPUT_DIR}/output_${Date.now()}.kml`) => {
 	fs.writeFileSync(fileName,data);
-	console.log("Wrote to :",fileName);
+	logger.info("Wrote to :",fileName);
 	return fileName;
 }
 
-export const getAuthURL = () => {
-	stravaApi.config({client_id:config.client_id, redirect_uri: `${config.redirect_uri}/code`});
+export const getAuthURL = (post = "code") => {
+	logger.info("getting auth URL");
+	const stravaConfig = {client_id:config.client_id, redirect_uri: `${config.redirect_uri}/${post}`};
+
+	logger.trace("Config:",stravaConfig);
+	stravaApi.config(stravaConfig);
 	const authURL = stravaApi.oauth.getRequestAccessURL({scope:"read,activity:read_all"});
 	return authURL;
 }
 
 export const getAuthToken = (code) => {
-	console.log("getting token for code",code);
+	logger.info("getting token for code",code);
 	return new Promise((resolve, reject) => {
 		stravaApi.oauth.getToken(code, (err,data) => {
 			if (err) {
@@ -368,7 +398,7 @@ export const getAuthToken = (code) => {
 				resolve(token);
 			}
 			catch (e) {
-				console.error("Error parsing token api results",e);
+				logger.error("Error parsing token api results",e);
 				reject(e);
 			}
 		});
@@ -390,7 +420,7 @@ const simplifyTrack = (data, tolerance) => {
 		return coordinates;
 		}
 	catch(e) {
-		console.error("Error with simplifyTrack",e);
+		logger.error("Error with simplifyTrack",e);
 	}
 }
 

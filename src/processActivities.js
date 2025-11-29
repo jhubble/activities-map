@@ -1,5 +1,7 @@
 let gpxParser = require('gpxparser');
 let simplify = require('simplify-geojson');
+import { logger } from './loggerSetup.mjs';
+
 
 let fs = require('fs');
 let printKml = require('./kmlExport');
@@ -16,7 +18,7 @@ let printKml = require('./kmlExport');
 const tolerance = .6;
 
 const processGpx = (fname) => {
-	//console.error("PROCESS GPX:",fname);
+	logger.trace("PROCESS GPX:",fname);
 	const gpxData = fs.readFileSync(fname).toString();
 	var gpx = new gpxParser(); //Create gpxParser Object
 
@@ -28,20 +30,20 @@ const processGpx = (fname) => {
 	const track = gpx.tracks[0];
 	const type = track.type;
 
-	console.error(time, type);
+	logger.trace(time, type);
 
 
 	const name = track.name;
 	const points = track.points;
-	//console.log(printKml.head(name));
+	logger.trace(printKml.head(name));
 
 	let geoJSON = gpx.toGeoJSON();
-	//console.error("GEOJSON geometry",geoJSON.features[0].geometry);
+	logger.trace("GEOJSON geometry",geoJSON.features[0].geometry);
 
 
 	const simple = simplify(geoJSON,tolerance / 10000);
 
-	//console.error("SIMPLE",simple.features[0].geometry);
+	logger.trace("SIMPLE",simple.features[0].geometry);
 	coordinates = simple.features[0].geometry.coordinates
 		.map((point) => { // only have lat and long
 			return `${point[0]},${point[1]},0`
@@ -61,5 +63,5 @@ if (process.argv.length > 2) {
 }
 
 else {
-	console.error("Usage: node gpxToJson.js gpx...");
+	logger.error("Usage: node gpxToJson.js gpx...");
 }

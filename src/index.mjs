@@ -1,14 +1,19 @@
 import express from 'express';
-import { dirname } from 'path';
+import {packageDirectorySync} from 'package-directory';
+import { logger } from './loggerSetup.mjs';
+import path from 'path';
 import { fileURLToPath } from 'url';
 import { TYPES, getAuthURL, getAuthToken, getStuff, outputFile } from './getStravaActivities.mjs';
 import { getGeoJsonFromFile, getGeoJsonFromString } from './kmlToGeoJson.mjs';
 import config from './config.mjs';
 import fs from 'fs';
 
+logger.info("starting app");
 const app = express();
 const port = config.run_on_port || 8080;
-const __dirname = dirname(fileURLToPath(import.meta.url));
+const __dirname = packageDirectorySync();
+
+logger.trace("dirname:",__dirname);
 
 const OPTIONS = {
 	type: Object.keys(TYPES),
@@ -103,17 +108,20 @@ app.get('/', (request, response) => {
 // /code is where we paste the code after authentication with strava
 // If we get here without authenticating, the "checkForNewer" default flag is flipped
 
-const getOptionForm = (token) => {
-	console.log("Token:",token);
+const getOptionForm = (token, refresh=false) => {
+	const auth_url = getAuthURL("coderefresh");
+	logger.info("Token:",token);
 	let options = JSON.parse(JSON.stringify(OPTIONS));
 	// Default to not use strava api if we don't have token
 	if (!token) {
 		options.checkForNewer = [false,true];
 	}
 	const htmlOptions = processOptions(options);
-	let output = `<form action="/process" method="get">`;
+	let output = `<form id="myForm" action="/process" method="get">`;
 	output += htmlOptions;
-	output += `<br>Strava token:<input type="text" name="token" value="${token || ''}"></input><br>`;
+	output += `<br>Strava token:<input type="text" name="token" value="${token || ''}"></input>`;
+	output += `<a id="refresh" onclick="saveFormData()" href="${auth_url}">Auth with Strava</a>`;
+	output += `<br>`;
 	output += `<p>fromStamp and toStamp or minutes from epoch. (e.g. Date.now()/1000)</p>`;
 	output += `<p>Distances are degrees from center (plus or minus)</p>`;
 	output += `<p>Check For Newer will call strava for more, otherwise, cache will be used</p>`;
@@ -122,8 +130,16 @@ const getOptionForm = (token) => {
 	output += `</form>`;
 	output += `<p><strong>The first time run with "Check For Newer" it will download all track information. This can take a long time.</strong>. Later calls will just get items newer than available.</p>`; 
 
+	output += `<script src="/formClient.js"></script>`;
+	if (refresh) {
+		output += `<script>restoreFormData()</script>`;
+	}
 	return output;
 }
+app.get('/formClient.js', (req, res) => {
+	logger.info("serving form client");
+  res.sendFile(path.join(__dirname, 'src/formClient.js'));
+});
 app.get('/code', (request, response) => {
 	const code = request?.query?.code;
 	if (!code) {
@@ -132,6 +148,22 @@ app.get('/code', (request, response) => {
 	else {
 		getAuthToken(code).then( token => {
 			response.send(getOptionForm(token));
+		})
+		.catch( (e) => {
+			response.send(getOptionForm());
+		});
+	}
+
+});
+
+app.get('/coderefresh', (request, response) => {
+	const code = request?.query?.code;
+	if (!code) {
+		response.send(getOptionForm());
+	}
+	else {
+		getAuthToken(code).then( token => {
+			response.send(getOptionForm(token,true));
 		})
 		.catch( (e) => {
 			response.send(getOptionForm());
@@ -178,7 +210,7 @@ const getMapHtml = ({kml = '', lat, long, tiles = 'osm' } = {}) => {
                                         });
                                 }).catch(function (error) {
                                         // There was an error
-                                        console.warn(error);
+                                        logger.error(error);
                                 });
                         }
 
@@ -207,7 +239,7 @@ app.get('/map/:kml?', (request, response) => {
 app.get('/geojson/:outfile', (request, response) => {
 	let outfile = request.params.outfile;
 	if (/^output_\d+\.kml$/.test(outfile)) {
-		console.log("outfile:",outfile);
+		logger.info("outfile:",outfile);
 		outfile = `${__dirname}/out/${outfile}`;
 		const geoJson = getGeoJsonFromFile(outfile);
 		response.send(geoJson);
@@ -232,9 +264,9 @@ const _getInitialData = async (request,response) => {
 	}
 	const lat = opts.location_center_lat || config.default_latitude;
 	const long = opts.location_center_long || config.default_longitude;
-	//console.log("options: ",opts);
+	logger.trace("options: ",opts);
 	const data = await getStuff(opts);
-	//console.log("DATA",data);
+	logger.trace("DATA",data);
 	if (!data) {
 		response.send('No data  found <a href="javascript:history.back()">go back</a>');
 		return false;
@@ -274,13 +306,14 @@ const getDaysInMonth = (monthYearStr) => {
 }
 
 app.get('/stats', async (request, response) => {
-	console.log("STATS");
+	logger.info("STATS");
 	const req = {...request};
 	req.query.stats = true;
 	const result = await _getInitialData(req, response);
 	const badGear = [];
 	const types = {};
 	const buckets = {};
+	const dayBuckets = {};
 	if (result) {
 		const {data,opts,lat,long} = result;
 		const {activities} = data;
@@ -293,7 +326,9 @@ app.get('/stats', async (request, response) => {
 			moving += track.moving_time;
 			const startDate = Date.parse(track.start_date);
 			const bucket = new Date(track.start_date).toLocaleString('default',{month: 'short', year: 'numeric'});
+			const dayBucket = new Date(track.start_date).toLocaleString('default',{day: 'numeric', month: 'short', year: 'numeric'});
 			buckets[bucket] = (buckets[bucket] || 0) + track.elapsed_time;
+			dayBuckets[dayBucket] = (dayBuckets[dayBucket] || 0) + track.elapsed_time;
 
 			types[track.type] = (types[track.type] || 0) + 1;
 			if (earliest === null || startDate < earliest) {
@@ -307,8 +342,8 @@ app.get('/stats', async (request, response) => {
 			}
 
 		});
-		//console.log("DATA",data);
-		//console.log("OPTS",opts);
+		logger.trace("DATA",data);
+		logger.trace("OPTS",opts);
 		const days = (latest-earliest)/1000/60/60/24;
 		const hours = elapsed/60/60;
 		const moving_hours = moving/60/60;
@@ -346,6 +381,26 @@ app.get('/stats', async (request, response) => {
 			})
 			.join('\n');
 		html += `</tbody></table>`;
+		html += `\n<h2>Daily stats (hours elapsed time)</h2>`;
+	html += `\n<table><thead><tr><th>Date</th><th>Daily</th><th>Year to Date</th></tr></thead><tbody>`;
+		let year =0;
+		let yearCount = 0;
+		html += Object.keys(dayBuckets)
+			.sort((a,b) => { return new Date(a) - new Date(b)})
+			.map(bucket => {
+				const currentYear = new Date(bucket).getFullYear();
+				if (year != currentYear) {
+					year = currentYear;
+					yearCount = 0;
+				}
+				yearCount += dayBuckets[bucket];
+				return `<tr><td>${bucket}</td>`
+					+`<td>${Number.parseFloat(dayBuckets[bucket]/60/60).toFixed(2)}</td>`
+					+`<td>${Number.parseFloat(yearCount/60/60).toFixed(2)}</td>`
+					+`</tr>`;
+			})
+			.join('\n');
+		html += `</tbody></table>`;
 		response.send(html);
 	}
 });
@@ -354,5 +409,5 @@ app.get('/stats', async (request, response) => {
 
 
 app.listen(port, () => {
-  console.log(`activities-map listening at http://localhost:${port}`)
+  logger.info(`activities-map listening at http://localhost:${port}`)
 })
