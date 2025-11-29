@@ -1,4 +1,4 @@
-let gpxParser = require('gpxparser');
+let gpxParser = require('@we-gold/gpxjs');
 let simplify = require('simplify-geojson');
 import { logger } from './loggerSetup.mjs';
 
@@ -19,12 +19,17 @@ const tolerance = .6;
 
 const processGpx = (fname) => {
 	logger.trace("PROCESS GPX:",fname);
+	const gpx = new gpxParser();
+	gpx.parse(gpxString);
 	const gpxData = fs.readFileSync(fname).toString();
-	var gpx = new gpxParser(); //Create gpxParser Object
+	//var gpx = new gpxParser(); //Create gpxParser Object
 
 	gpx.parse(gpxData); //parse gpx file from string data
 
-	var totalDistance = gpx.tracks[0].distance.total;
+	if (gpx.tracks && gpx.tracks.length >1) {
+		logger.warm("multiple tracks in gpx track");
+	}
+	var totalDistance = gpx.distance.total;
 
 	const time = gpx.metadata.time;
 	const track = gpx.tracks[0];
