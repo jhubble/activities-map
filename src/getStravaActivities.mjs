@@ -6,6 +6,8 @@ import {execSync} from 'child_process';
 import geoJSON from 'geojson';
 import simplify from 'simplify-geojson';
 import axios from 'axios';
+import { readdir, stat, unlink } from 'fs/promises';
+import path from 'path';
 
 // Todo: have index of strava tokens to users (not yet implemented)
 const stravaTokens = {};
@@ -23,7 +25,8 @@ const TOLERANCE = config.tolerance || .6;
 
 const CACHE_DIR = config.cache_dir;
 const OUTPUT_DIR = config.output_dir;
-const ACTIVITY_LIST_CACHE_FILE = `${CACHE_DIR}/allActivities.json`;
+const ACTIVITY_LIST_CACHE_NAME = "allActivities.json";
+const ACTIVITY_LIST_CACHE_FILE = `${CACHE_DIR}/${ACTIVITY_LIST_CACHE_NAME}`;
 if (!fs.existsSync(CACHE_DIR)) {
 	logger.info("Creating cache dir:",CACHE_DIR);
 	fs.mkdirSync(CACHE_DIR);
@@ -191,6 +194,7 @@ export const getStuff = async ({ type = '', checkForNewer = false, location = {}
 				logger.error("unable to rename old file",ACTIVITY_LIST_CACHE_FILE);
 			}
 			fs.writeFileSync(ACTIVITY_LIST_CACHE_FILE,JSON.stringify(payload,null,1));
+			CleanupAllActivities();
 		}
 		else if (checkForNewer && checkForNewer !== 'false') {
 			logger.info("Last timestamp:",last);
@@ -495,3 +499,64 @@ export const callStravaAPI = async (token, endpoint,opts) => {
 	    throw error;
   }
 }
+
+const CleanupAllActivities = () => {
+
+const DIRECTORY_PATH = CACHE_DIR;
+const FILE_PREFIX = `${ACTIVITY_LIST_CACHE_NAME}.`;
+const KEEP_COUNT = 10;
+
+	async function maintainRecentFiles(dirPath, prefix, keepCount) {
+		logger.info(`Clean up activities: dirPath:${dirPath},prefix: ${prefix}, keepCount: ${keepCount}`);
+		if (!dirPath || !prefix) {
+			logger.error("invalid directory or prefix, not cleaning up");
+			return;
+		}
+	  try {
+	    const files = await readdir(dirPath);
+
+	    const matchingFiles = [];
+	    for (const file of files) {
+	      if (file.startsWith(prefix)) {
+		const fullPath = path.join(dirPath, file);
+		try {
+		  const fileStat = await stat(fullPath);
+		  if (fileStat.isFile()) {
+		    matchingFiles.push({
+		      name: file,
+		      path: fullPath,
+		      mtimeMs: fileStat.mtimeMs,
+		    });
+		  }
+		} catch (err) {
+		}
+	      }
+	    }
+
+		  logger.info("Files matching path:",matchingFiles.length);
+	    if (matchingFiles.length === 0) {
+	      return;
+	    }
+
+	    matchingFiles.sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+	    const filesToDelete = matchingFiles.slice(keepCount);
+		  logger.info("Files to delete",filesToDelete.length,filesToDelete);
+
+	    if (filesToDelete.length === 0) {
+	    } else {
+	      for (const file of filesToDelete) {
+		try {
+		  await unlink(file.path);
+		} catch (err) {
+		}
+	      }
+	    }
+
+	  } catch (error) {
+	  }
+	}
+
+	maintainRecentFiles(DIRECTORY_PATH, FILE_PREFIX, KEEP_COUNT);
+}
+
