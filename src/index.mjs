@@ -3,7 +3,7 @@ import {packageDirectorySync} from 'package-directory';
 import { logger } from './loggerSetup.mjs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { TYPES, getAuthURL, getAuthToken, getStuff, outputFile } from './getStravaActivities.mjs';
+import { callStravaAPI, TYPES, getAuthURL, getAuthToken, getStuff, outputFile } from './getStravaActivities.mjs';
 import { getGeoJsonFromFile, getGeoJsonFromString } from './kmlToGeoJson.mjs';
 import config from './config.mjs';
 import fs from 'fs';
@@ -108,9 +108,9 @@ app.get('/', (request, response) => {
 // /code is where we paste the code after authentication with strava
 // If we get here without authenticating, the "checkForNewer" default flag is flipped
 
-const getOptionForm = (token, refresh=false) => {
+const getOptionForm = (token, athleteid, refresh=false) => {
 	const auth_url = getAuthURL("coderefresh");
-	logger.info("Token:",token);
+	logger.info("Token from options form:",token);
 	let options = JSON.parse(JSON.stringify(OPTIONS));
 	// Default to not use strava api if we don't have token
 	if (!token) {
@@ -119,6 +119,7 @@ const getOptionForm = (token, refresh=false) => {
 	const htmlOptions = processOptions(options);
 	let output = `<form id="myForm" action="/process" method="get">`;
 	output += htmlOptions;
+	output += `<br>Stava Athlete ID:<input type="text" name="athleteid" value="${athleteid}"</input>`;
 	output += `<br>Strava token:<input type="text" name="token" value="${token || ''}"></input>`;
 	output += `<a id="refresh" onclick="saveFormData()" href="${auth_url}">Auth with Strava</a>`;
 	output += `<br>`;
@@ -142,12 +143,14 @@ app.get('/formClient.js', (req, res) => {
 });
 app.get('/code', (request, response) => {
 	const code = request?.query?.code;
+	logger.info("Calling /code with code",code);
 	if (!code) {
 		response.send(getOptionForm());
 	}
 	else {
-		getAuthToken(code).then( token => {
-			response.send(getOptionForm(token));
+		getAuthToken(code).then( ({access_token,athleteID})  => {
+			logger.info("Got token",access_token, "athleteid",athleteID);
+			response.send(getOptionForm(access_token,athleteID));
 		})
 		.catch( (e) => {
 			response.send(getOptionForm());
@@ -158,14 +161,19 @@ app.get('/code', (request, response) => {
 
 app.get('/coderefresh', (request, response) => {
 	const code = request?.query?.code;
+	logger.info("Calling /coderefresh with code",code);
 	if (!code) {
+		logger.debug("No code, so direct to option form");
 		response.send(getOptionForm());
 	}
 	else {
-		getAuthToken(code).then( token => {
-			response.send(getOptionForm(token,true));
+		logger.debug("code, so calling promise");
+		getAuthToken(code).then( ({access_token,athleteID})  => {
+			logger.info("Got token",access_token, "athleteid",athleteID);
+			response.send(getOptionForm(access_token,athleteID,true));
 		})
 		.catch( (e) => {
+			logger.error("error with token",e);
 			response.send(getOptionForm());
 		});
 	}
@@ -264,7 +272,7 @@ const _getInitialData = async (request,response) => {
 	}
 	const lat = opts.location_center_lat || config.default_latitude;
 	const long = opts.location_center_long || config.default_longitude;
-	logger.trace("options: ",opts);
+	logger.debug("options: ",opts);
 	const data = await getStuff(opts);
 	logger.trace("DATA",data);
 	if (!data) {

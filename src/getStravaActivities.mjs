@@ -1,4 +1,3 @@
-import stravaApi from "strava-v3";
 import { logger } from './loggerSetup.mjs';
 import config from './config.mjs';
 import printKml from './kmlExport.js';
@@ -6,6 +5,10 @@ import fs from 'fs';
 import {execSync} from 'child_process';
 import geoJSON from 'geojson';
 import simplify from 'simplify-geojson';
+import axios from 'axios';
+
+// Todo: have index of strava tokens to users (not yet implemented)
+const stravaTokens = {};
 /*
  * getStravaActvities
  * Gets all Strava Activities via Strava API and produces a kml
@@ -18,8 +21,6 @@ import simplify from 'simplify-geojson';
 // usually overwritten by param value
 const TOLERANCE = config.tolerance || .6;
 
-stravaApi.config({client_id:config.client_id, client_secret:config.client_secret, redirect_uri:config.redirect_uri});
-let strava = new stravaApi.client({});
 const CACHE_DIR = config.cache_dir;
 const OUTPUT_DIR = config.output_dir;
 const ACTIVITY_LIST_CACHE_FILE = `${CACHE_DIR}/allActivities.json`;
@@ -51,14 +52,15 @@ const checkAPIInterval = () => {
 export const TYPES = config.activity_types;
 
 // Recursively get all activities within a time range
-const getTrackListPage = async ({page=1, trackList=[], fromStamp=0, toStamp=Math.ceil(Date.now()/1000)} = {}) => {
+const getTrackListPage = async ({token, page=1, trackList=[], fromStamp=0, toStamp=Math.ceil(Date.now()/1000)} = {}) => {
+	logger.debug("getTrackListPage, token:",token);
 	logger.info("Page:",page,"activities:",trackList.length, "from:",fromStamp, "to:",toStamp);
 	try {
-		const payload = await strava.athlete.listActivities({id:373707, after:fromStamp, before: toStamp, per_page: 200, page: page})
+		const payload = await callStravaAPI(token,"athlete/activities",{id:373707, after:fromStamp, before: toStamp, per_page: 200, page: page});
 		called += 1;
 		if (payload.length) {
 			trackList.push(...payload);
-			trackList = await getTrackListPage({page:page+1,trackList:trackList, fromStamp:fromStamp, toStamp: toStamp });
+			trackList = await getTrackListPage({page:page+1,trackList:trackList, fromStamp:fromStamp, toStamp: toStamp, token:token });
 		}
 	}
 	catch (e) {
@@ -89,6 +91,7 @@ const compareTrackMetaData = (oldTrack, newTrack) => {
 	});
 }
 export const getStuff = async ({ type = '', checkForNewer = false, location = {}, includePrivate=false, fromStamp, toStamp, token, tolerance, refresh = false } = {}) => {
+	logger.debug(`getStuff: type: ${type}, checkForNewer: ${checkForNewer}, location: ${location}, includePrivate: ${includePrivate}, fromStamp: ${fromStamp}, toStamp: ${toStamp}, token: ${token}, tolerance: ${tolerance}, refresh: ${refresh}`);
 	checkAPIInterval();
 	logger.info("TOLERANCE",tolerance);
 	if (!tolerance) {
@@ -104,10 +107,7 @@ export const getStuff = async ({ type = '', checkForNewer = false, location = {}
 		logger.info("toStamp converted: ",toStamp);
 	}
 	logger.info("TOKEN:",token);
-	if (token) {
-		// This was initially initialized in module scope
-		strava = new stravaApi.client(token);
-	}
+	// Now we just pass around the token
 
 	// structure the lat/long in the format we use
 	if (location?.center) {
@@ -152,7 +152,7 @@ export const getStuff = async ({ type = '', checkForNewer = false, location = {}
 			});
 
 			const endTime = toStamp || Date.now()/1000;
-			const newPayload = await getTrackListPage({fromStamp:fromStamp, toStamp: endTime});
+			const newPayload = await getTrackListPage({token:token, fromStamp:fromStamp, toStamp: endTime});
 			// Use for loop for async
 			for (let i=0; i< newPayload.length; i++) {
 				const activity = newPayload[i];
@@ -164,14 +164,14 @@ export const getStuff = async ({ type = '', checkForNewer = false, location = {}
 					if (compareTrackMetaData(oldActivity, activity)) {
 						logger.info("Changes, so updating metadata and redownloading");
 						payload[oldActivityIndex] = activity;
-						await processActivity(activity,true,tolerance);
+						await processActivity(activity,token,true,tolerance);
 					}
 				}
 				else {
 					logger.info(`"${id}" Does not exist. Downloading and adding`);
 					payload.push(activity);
 					try {
-						fullActivity = await processActivity(activity,true,tolerance);
+						fullActivity = await processActivity(activity,token,true,tolerance);
 					}
 					catch (e) {
 						logger.error(`Error with process activity for ${id}`,e);
@@ -200,7 +200,7 @@ export const getStuff = async ({ type = '', checkForNewer = false, location = {}
 			catch(e) {
 				logger.error("could not get date",e);
 			}
-			payload = await getTrackListPage({trackList:payload, fromStamp:last});
+			payload = await getTrackListPage({token:token, trackList:payload, fromStamp:last});
 			// Properly sort and filter - since new ones will show up at end
 			// We want newest first
 			payload = payload.sort((a,b) => {
@@ -216,7 +216,7 @@ export const getStuff = async ({ type = '', checkForNewer = false, location = {}
 			fs.writeFileSync(ACTIVITY_LIST_CACHE_FILE,JSON.stringify(payload,null,1));
 		}
 		logger.info("Number of activities:",payload.length);
-		const {trackData,activities} = await processActivities({payload:payload, type:type, location:location, includePrivate:includePrivate, fromStamp: fromStamp,toStamp:toStamp, tolerance:tolerance});
+		const {trackData,activities} = await processActivities({token:token, payload:payload, type:type, location:location, includePrivate:includePrivate, fromStamp: fromStamp,toStamp:toStamp, tolerance:tolerance});
 		// return raw track data and kmlTrack
 		const kmlTrack = printKml.head("tracks")+trackData+printKml.tail(config.default_latitude,config.default_longitude);
 		return {activities, kmlTrack}
@@ -227,7 +227,7 @@ export const getStuff = async ({ type = '', checkForNewer = false, location = {}
 }
 
 
-const processActivities = async ({payload, type, location={}, includePrivate=false, fromStamp, toStamp, tolerance}) => {
+const processActivities = async ({token, payload, type, location={}, includePrivate=false, fromStamp, toStamp, tolerance}) => {
 	checkAPIInterval();
 	let error = 0;
 	let kmlTracks = '';
@@ -281,7 +281,7 @@ const processActivities = async ({payload, type, location={}, includePrivate=fal
 		if (!error) {
 			try {
 				logger.trace("Processing activity:",activity);
-				const trackData = await processActivity(activity,false,tolerance);
+				const trackData = await processActivity(activity,token,false,tolerance);
 				kmlTracks += trackData;
 			}
 			catch (e) {
@@ -304,7 +304,7 @@ const processActivities = async ({payload, type, location={}, includePrivate=fal
 	return {trackData:kmlTracks,activities:desiredActivities};
 }
 
-const processActivity = async (activity, force=false, tolerance=TOLERANCE) => {
+const processActivity = async (activity, token, force=false, tolerance=TOLERANCE) => {
 	logger.trace("Activity:",activity);
 	checkAPIInterval();
 	// force will force redownload even if cache exists
@@ -341,7 +341,7 @@ const processActivity = async (activity, force=false, tolerance=TOLERANCE) => {
 		else {
 			++called;
 			logger.debug(`API Calls: ${called}`);
-			stream = await strava.streams.activity({id:activity.id, types:'time,distance,latlng', resolution:'medium'});
+			stream = await callStravaAPI(token,`activities/${activity.id}/streams`,{keys:"time,distance,latlng", resolution:"medium"});
 			fs.writeFileSync(trackCacheFile,JSON.stringify(stream,null,1));
 			logger.info("Wrote file",trackCacheFile);
 		}
@@ -377,33 +377,76 @@ export const outputFile = (data, fileName=`${OUTPUT_DIR}/output_${Date.now()}.km
 }
 
 export const getAuthURL = (post = "code") => {
-	logger.info("getting auth URL");
-	const stravaConfig = {client_id:config.client_id, redirect_uri: `${config.redirect_uri}/${post}`};
-
-	logger.trace("Config:",stravaConfig);
-	stravaApi.config(stravaConfig);
-	const authURL = stravaApi.oauth.getRequestAccessURL({scope:"read,activity:read_all"});
+	logger.info("getAuthURL post: ",post);
+	const authURL = `https://www.strava.com/oauth/authorize?client_id=${config.client_id}&response_type=code&redirect_uri=${config.redirect_uri}/${post}&scope=read,activity:read_all`;
+	logger.info(`Strava auth url: ${authURL}`);
 	return authURL;
 }
 
-export const getAuthToken = (code) => {
-	logger.info("getting token for code",code);
+export const getAuthToken = async (code) => {
+	logger.debug("setting up promise for auth token",code);
 	return new Promise((resolve, reject) => {
-		stravaApi.oauth.getToken(code, (err,data) => {
-			if (err) {
-				reject(err);
-			}
-			try {
-				const token = data.body.access_token;
-				resolve(token);
-			}
-			catch (e) {
-				logger.error("Error parsing token api results",e);
-				reject(e);
-			}
+		logger.info("Calling strava to get token for code:",code);
+		logger.debug("calling axios");
+		axios.post('https://www.strava.com/oauth/token', {
+		  client_id: config.client_id,
+		  client_secret: config.client_secret,
+		  code: code,
+		  grant_type: 'authorization_code'
+		}).then(async response => {
+			logger.trace("auth token response",response);
+			const { access_token, refresh_token, expires_at } = response.data;
+			const athleteID = await getCurrentAthleteId(access_token);
+			logger.info("Athlete id",athleteID);
+			logger.debug("access token",access_token);
+			stravaTokens[athleteID] = access_token;
+			resolve({access_token, athleteID});
+		}).catch(error => {
+			logger.debug("error");
+			// Handle any errors
+			logger.error("Error parsing api response from getAuthToken ",error);
+			reject(error);
 		});
 	});
 }
+
+/**
+ * Retrieves the current user's athlete ID from the Strava API.
+ * @param {string} accessToken - The valid Strava API access token for the user.
+ * @returns {Promise<number|null>} A promise that resolves with the athlete ID or null if an error occurs.
+ */
+async function getCurrentAthleteId(accessToken) {
+  const athleteEndpoint = 'https://www.strava.com/api/v3/athlete';
+
+  try {
+    const response = await fetch(athleteEndpoint, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`, // Include the access token in the Authorization header
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const data = await response.json();
+    // The response body contains the athlete details, including the 'id'
+    const athleteId = data.id;
+    console.log('Current Athlete ID:', athleteId);
+    return athleteId;
+
+  } catch (error) {
+    console.error('Failed to retrieve athlete details:', error);
+    return null;
+  }
+}
+
+// Example Usage (replace 'YOUR_ACCESS_TOKEN' with the actual token)
+// This should be called after your application successfully completes the OAuth flow.
+// getCurrentAthleteId('YOUR_ACCESS_TOKEN');
+
 
 const simplifyTrack = (data, tolerance) => {
 	try {
@@ -424,3 +467,31 @@ const simplifyTrack = (data, tolerance) => {
 	}
 }
 
+export const callStravaAPI = async (token, endpoint,opts) => {
+	// TODO: Whitelist certain APIs
+	logger.debug("callStravaAPI with token:",token);
+	const params = new URLSearchParams(opts);
+
+	// Convert the instance to a string
+	const queryString = params.toString();
+	const url = `https://www.strava.com/api/v3/${endpoint}?${queryString}`;
+
+	try {
+	    const response = await axios.get(url, {
+	      headers: {
+		// Use the access token received during OAuth
+		'Authorization': `Bearer ${token}`,
+	      },
+	    });
+
+	    return response.data;
+	  } catch (error) {
+	    // Check if the error is due to an expired token (HTTP 401 Unauthorized)
+	    if (axios.isAxiosError(error) && error.response && error.response.status === 401) {
+	      logger.error("Access token expired or invalid. Refresh token required.");
+	      // TODO: trigger the token refresh logic here.
+	    }
+		  logger.error(error);
+	    throw error;
+  }
+}
