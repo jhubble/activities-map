@@ -12,6 +12,7 @@
   "author": "Jeremy Hubble",
   "license": "ISC",
   "dependencies": {
+    "@flow-js/garmin-connect": "^1.6.7",
     "@mapbox/togeojson": "^0.16.2",
     "@xmldom/xmldom": "^0.8.11",
     "axios": "^1.13.2",

@@ -11,6 +11,7 @@ stravaCreds.json
 cache/
 out/
 logs/
+creds/
 
 # misc
 .DS_Store

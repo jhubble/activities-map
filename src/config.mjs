@@ -11,7 +11,7 @@ import { fileURLToPath } from 'url';
 
 const dirname = packageDirectorySync();
 logger.trace("dirname",dirname);
-const CREDS = `${dirname}/stravaCreds.json`;
+const CREDS = `${dirname}/creds/creds.json`;
 let stravaCreds = {};
 logger.info("Creds file:",CREDS);
 if (fs.existsSync(CREDS)) {
