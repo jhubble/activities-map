@@ -3,8 +3,9 @@ import {packageDirectorySync} from 'package-directory';
 import { logger } from './loggerSetup.mjs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { callStravaAPI, TYPES, getAuthURL, getAuthToken, getStuff, outputFile } from './getStravaActivities.mjs';
+import { callStravaAPI, TYPES, getAuthURL, getAuthToken, getCacheFileFromActivity, getStuff, outputFile } from './getStravaActivities.mjs';
 import { getGeoJsonFromFile, getGeoJsonFromString } from './kmlToGeoJson.mjs';
+import { getSpatialAnalysis } from './stravaToGeoJSONAndHull.mjs';
 import config from './config.mjs';
 import fs from 'fs';
 
@@ -181,7 +182,7 @@ app.get('/coderefresh', (request, response) => {
 
 });
 
-const getMapHtml = ({kml = '', lat, long, tiles = 'osm' } = {}) => {
+const getMapHtml = ({kml = '', lat, long, tiles = 'osm', geoJson = '' } = {}) => {
 	const osmTiles = `
                         L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
                             attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
@@ -195,33 +196,38 @@ const getMapHtml = ({kml = '', lat, long, tiles = 'osm' } = {}) => {
                 <div id="mapinfo"></div>
                 <div id="map" style="height: 800px; border: 1px solid black"></div>
                 <script>
-                        const kml = '${kml}';
+			const layers = [ '${kml}', '${geoJson}' ];
                         var map = L.map('map').setView([${lat}, ${long}], 13);
 			${tiles === 'osm' ? osmTiles : '' }
 
-                        if (kml) {
+			layers.forEach( kml => {
+				if (kml) {
+					fetch('/geojson/'+kml).then(function (response) {
+						response.text().then((geojson) => {
+							const geojsonJSON = JSON.parse(geojson);
+							const mapinfo = document.getElementById('mapinfo').innerHTML;
+							let header = 'Number of tracks: '+geojsonJSON.features.length+' <a href="javascript:history.back()">go back</a>';
+							if (mapinfo) {
+								header = mapinfo + " - " + header;
+							}
+							document.getElementById('mapinfo').innerHTML = header;
+							function onEachFeature(feature, layer) {
+							    if (feature.properties && feature.properties.name) {
+								layer.bindPopup(feature.properties.name);
+							    }
+							}
 
-                                fetch('/geojson/'+kml).then(function (response) {
-                                        response.text().then((geojson) => {
-                                                const geojsonJSON = JSON.parse(geojson);
-						const header = 'Number of tracks: '+geojsonJSON.features.length+' <a href="javascript:history.back()">go back</a>';
-                                                document.getElementById('mapinfo').innerHTML = header;
-                                                function onEachFeature(feature, layer) {
-                                                    if (feature.properties && feature.properties.name) {
-                                                        layer.bindPopup(feature.properties.name);
-                                                    }
-                                                }
-
-                                                L.geoJSON(geojsonJSON, {
-                                                    onEachFeature: onEachFeature
-                                                }).addTo(map);
-                                                //L.geoJSON(JSON.parse(geojson)).addTo(map);
-                                        });
-                                }).catch(function (error) {
-                                        // There was an error
-                                        logger.error(error);
-                                });
-                        }
+							L.geoJSON(geojsonJSON, {
+							    onEachFeature: onEachFeature
+							}).addTo(map);
+							//L.geoJSON(JSON.parse(geojson)).addTo(map);
+						});
+					}).catch(function (error) {
+						// There was an error
+						logger.error(error);
+					});
+				}
+			})
 
 	</script>
 	`;
@@ -252,6 +258,11 @@ app.get('/geojson/:outfile', (request, response) => {
 		outfile = `${__dirname}/out/${outfile}`;
 		const geoJson = getGeoJsonFromFile(outfile);
 		response.send(geoJson);
+	}
+	else if (/\d+\.geojson$/.test(outfile)) {
+		logger.info("outfile:",outfile);
+		outfile = `${__dirname}/out/${outfile}`;
+		response.sendFile(outfile);
 	}
 	else {
 		response.send(outfile);
@@ -294,16 +305,28 @@ app.get('/process', async (request, response) => {
 	const result = await _getInitialData(request, response);
 	if (result) {
 		const {data,opts,lat,long} = result;
+		const activities = data.activities;
+		// get hulls
+		// use 0 buffer zone (they must touch)
+		const fileList = activities.map(activity => getCacheFileFromActivity(activity));
+		const hulls = getSpatialAnalysis(fileList, 0);
+		const hullsKml = hulls.kml;
+		const hullsGeoJson = hulls.geoJSON;
 		const kmlTrack = data.kmlTrack;
 		if (!kmlTrack) {
 			response.send('No data  found <a href="javascript:history.back()">go back</a>');
 		}
 		else {
-			const kmlFileName =  `output_${Date.now()}.kml`;
-			const fname = `${__dirname}/out/${kmlFileName}`;
-			let outputFilePath = outputFile(kmlTrack, fname);
-			let html = `Download <a href="${kmlFileName}">${kmlFileName}</a>`;
-			html += getMapHtml({kml:kmlFileName, lat:lat, long: long, tiles:opts.tiles});
+			const outputDate = `output_${Date.now()}`;
+			const kmlFileName =  `${outputDate}.kml`;
+			const hullGeoJsonFileName = `hull_${outputDate}.geojson`;
+
+			const hullGeoJsonFullPath = `${__dirname}/out/${hullGeoJsonFileName}`;
+			const tracksFullPath = `${__dirname}/out/${kmlFileName}`;
+			outputFile(kmlTrack, tracksFullPath);
+			outputFile(JSON.stringify(hullsGeoJson,null,2), hullGeoJsonFullPath);
+			let html = `Download tracks: <a href="${kmlFileName}">${kmlFileName}</a>`;
+			html += getMapHtml({kml:kmlFileName, lat:lat, long: long, tiles:opts.tiles, geoJson:hullGeoJsonFileName});
 			response.send(html);
 		}
 	}
