@@ -4,90 +4,94 @@ import * as turf from '@turf/turf';
 import tokml from 'tokml';
 
 /**
- * Processes Strava-style JSON or standard GeoJSON files to produce 
- * convex hulls around connected paths.
- * * @param {string[]} fileList - Array of absolute or relative file paths.
- * @param {number} [bufferKm=0] - Distance to bridge gaps between separate paths.
- * * Appropriate bufferKm values:
- * - 0: (Default) No bridging. Only perfectly touching paths are grouped.
- * - 0.001 to 0.003: (1-3 meters) Ideal for bridging GPS drift on the same trail.
- * - 0.01: (10 meters) Bridges gaps across standard two-lane roads.
- * - 0.05: (50 meters) Group activities within the same small park or block.
- * * @returns {Object|null} { geoJSON: Object, kml: string } or null if no data found.
+ * High-performance spatial processor using simplification and clustering.
+ * @param {string[]} fileList - Array of file paths.
+ * @param {number} [bufferKm=0.01] - Connectivity threshold.
+ * @param {number} [simplifyTolerance=0.005] - Tolerance for simplifying paths.
+ * 0.001: High detail, slower.
+ * 0.01: Very fast, slight loss of precision (perfect for hulls).
  */
-export function getSpatialAnalysis(fileList, bufferKm = 0) {
-    let allFeatures = [];
+export function getSpatialAnalysis(fileList, bufferKm = 0.01, simplifyTolerance = 0.005) {
+    let allPaths = [];
+    let pointCloud = [];
 
-    fileList.forEach(filePath => {
+    console.time("⏱️ Total Execution Time");
+    console.log(`\n🚀 Processing ${fileList.length} files...`);
+
+    // 1. Optimized Parsing & Simplification
+    fileList.forEach((filePath, index) => {
         try {
-            const rawContent = fs.readFileSync(filePath, 'utf8');
-            const rawData = JSON.parse(rawContent);
-            
-            // --- 1. Identify and Parse Data Type ---
-            
-            // Case A: Strava internal stream format (Array of objects)
+            const rawData = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+            let coords = [];
+
+            // Extract coordinates based on format
             if (Array.isArray(rawData)) {
                 const latLngObj = rawData.find(i => i.type === 'latlng');
-                const nameObj = rawData.find(i => i.type === 'name');
-                
-                if (latLngObj && latLngObj.data) {
-                    const activityName = nameObj ? nameObj.data : path.basename(filePath);
-                    // Standardize: [lat, lng] -> [lng, lat]
-                    const coords = latLngObj.data.map(c => [c[1], c[0]]);
-                    
-                    allFeatures.push(turf.lineString(coords, { 
-                        name: activityName, 
-                        source: 'strava_json' 
-                    }));
+                if (latLngObj?.data) {
+                    coords = latLngObj.data.map(c => [c[1], c[0]]);
+                    const nameObj = rawData.find(i => i.type === 'name');
+                    allPaths.push(turf.lineString(coords, { name: nameObj ? nameObj.data : path.basename(filePath) }));
                 }
-            } 
-            // Case B: Standard GeoJSON
-            else if (rawData.type === 'FeatureCollection' || rawData.type === 'Feature') {
+            } else if (rawData.type === 'FeatureCollection' || rawData.type === 'Feature') {
                 const fc = rawData.type === 'FeatureCollection' ? rawData : turf.featureCollection([rawData]);
-                allFeatures.push(...fc.features);
+                fc.features.forEach(f => {
+                    if (f.geometry.type === 'LineString') {
+                        coords = f.geometry.coordinates;
+                        allPaths.push(f);
+                    }
+                });
+            }
+
+            if (coords.length > 0) {
+                // THE SPEED FIX: Simplify the path before adding to point cloud
+                // This removes redundant points on straight lines without changing the hull shape.
+                const line = turf.lineString(coords);
+                const simplified = turf.simplify(line, { tolerance: simplifyTolerance, highQuality: false });
+                
+                simplified.geometry.coordinates.forEach(c => {
+                    pointCloud.push(turf.point(c));
+                });
             }
         } catch (err) {
-            console.error(`Error processing file ${filePath}:`, err.message);
+            console.error(`  ❌ Error: ${filePath}`, err.message);
         }
     });
 
-    if (allFeatures.length === 0) return null;
+    console.log(`  📉 Simplified point cloud from ~${allPaths.reduce((a, b) => a + b.geometry.coordinates.length, 0)} to ${pointCloud.length} points.`);
 
-    // --- 2. Connectivity Logic ---
-    
-    // We create a temporary set of geometries to determine "connectedness"
-    // If bufferKm > 0, we expand paths so they overlap even if they are slightly apart.
-    let discoveryFeatures = allFeatures;
-    if (bufferKm > 0) {
-        discoveryFeatures = allFeatures.map(f => turf.buffer(f, bufferKm, { units: 'kilometers' }));
-    }
+    // 2. Fast Clustering
+    console.log(`🧩 Clustering groups...`);
+    const pointsFC = turf.featureCollection(pointCloud);
+    const clustered = turf.clustersDbscan(pointsFC, bufferKm, { units: 'kilometers', minPoints: 1 });
 
-    // Combine all (potentially buffered) paths and flatten them into distinct "islands"
-    const combined = turf.combine(turf.featureCollection(discoveryFeatures));
-    const flattened = turf.flatten(combined);
+    // 3. Efficient Hull Generation
+    const clusterMap = {};
+    clustered.features.forEach(f => {
+        const id = f.properties.cluster;
+        if (id === undefined) return;
+        if (!clusterMap[id]) clusterMap[id] = [];
+        clusterMap[id].push(f.geometry.coordinates);
+    });
 
-    // --- 3. Hull Generation ---
-    
-    const hullFeatures = flattened.features.map(f => {
-        const hull = turf.convex(f);
+    console.log(`📐 Drawing hulls for ${Object.keys(clusterMap).length} areas...`);
+    const hullFeatures = Object.keys(clusterMap).map(id => {
+        const coords = clusterMap[id];
+        if (coords.length < 3) return null;
+        
+        const hull = turf.convex(turf.featureCollection(coords.map(c => turf.point(c))));
         if (hull) {
-            hull.properties = {
-                name: "Activity Boundary",
-                fill: "#ff7800",
-                "fill-opacity": 0.2,
-                stroke: "#ff7800",
-                "stroke-width": 2
-            };
+            hull.properties = { name: `Area ${parseInt(id) + 1}`, fill: "#ff7800", "fill-opacity": 0.25 };
         }
         return hull;
-    }).filter(h => h !== null);
+    }).filter(Boolean);
 
-    // --- 4. Package Results ---
-    
-    const finalGeoJSON = turf.featureCollection([...allFeatures, ...hullFeatures]);
-
-    return {
+    // 4. Wrap up
+    const finalGeoJSON = turf.featureCollection([...allPaths, ...hullFeatures]);
+    const result = {
         geoJSON: finalGeoJSON,
         kml: tokml(finalGeoJSON, { name: 'name' })
     };
+
+    console.timeEnd("⏱️ Total Execution Time");
+    return result;
 }
