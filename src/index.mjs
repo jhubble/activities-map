@@ -200,10 +200,17 @@ const getMapHtml = ({kml = '', lat, long, tiles = 'osm', geoJson = '' } = {}) =>
                         var map = L.map('map').setView([${lat}, ${long}], 13);
 			${tiles === 'osm' ? osmTiles : '' }
 
+			const colors = ['red','green','yellow'];
+			let color = 0;
 			layers.forEach( kml => {
+				console.log("loop",color,kml);
 				if (kml) {
+					const colorToUse = colors[color];
+					color++;
 					fetch('/geojson/'+kml).then(function (response) {
 						response.text().then((geojson) => {
+							// todo: actually use the colors
+							console.log("processing file:",kml,geojson);
 							const geojsonJSON = JSON.parse(geojson);
 							const mapinfo = document.getElementById('mapinfo').innerHTML;
 							let header = 'Number of tracks: '+geojsonJSON.features.length+' <a href="javascript:history.back()">go back</a>';
@@ -309,8 +316,10 @@ app.get('/process', async (request, response) => {
 		// get hulls
 		// use 0 buffer zone (they must touch)
 		const fileList = activities.map(activity => getCacheFileFromActivity(activity));
-		console.log("got fileList",fileList.length)
-		const hulls = getSpatialAnalysis(fileList, 0);
+		console.log("got fileList",fileList.length);
+		const hulls = getSpatialAnalysis(fileList);
+		//const hulls = getSpatialAnalysis(fileList, 0);
+		console.log("hulls",hulls);
 		const hullsKml = hulls.kml;
 		const hullsGeoJson = hulls.geoJSON;
 		const kmlTrack = data.kmlTrack;
