@@ -3,7 +3,7 @@ import {packageDirectorySync} from 'package-directory';
 import { logger } from './loggerSetup.mjs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { TYPES, getAuthURL, getAuthToken, getStuff, outputFile } from './getStravaActivities.mjs';
+import { callStravaAPI, TYPES, getAuthURL, getAuthToken, getStuff, outputFile } from './getStravaActivities.mjs';
 import { getGeoJsonFromFile, getGeoJsonFromString } from './kmlToGeoJson.mjs';
 import config from './config.mjs';
 import fs from 'fs';
@@ -11,6 +11,7 @@ import fs from 'fs';
 logger.info("starting app");
 const app = express();
 const port = config.run_on_port || 8080;
+const foot = config.activity_types.Foot; // Run, Walk, Hike
 const __dirname = packageDirectorySync();
 
 logger.trace("dirname:",__dirname);
@@ -108,9 +109,9 @@ app.get('/', (request, response) => {
 // /code is where we paste the code after authentication with strava
 // If we get here without authenticating, the "checkForNewer" default flag is flipped
 
-const getOptionForm = (token, refresh=false) => {
+const getOptionForm = (token, athleteid, refresh=false) => {
 	const auth_url = getAuthURL("coderefresh");
-	logger.info("Token:",token);
+	logger.info("Token from options form:",token);
 	let options = JSON.parse(JSON.stringify(OPTIONS));
 	// Default to not use strava api if we don't have token
 	if (!token) {
@@ -119,6 +120,7 @@ const getOptionForm = (token, refresh=false) => {
 	const htmlOptions = processOptions(options);
 	let output = `<form id="myForm" action="/process" method="get">`;
 	output += htmlOptions;
+	output += `<br>Stava Athlete ID:<input type="text" name="athleteid" value="${athleteid}"</input>`;
 	output += `<br>Strava token:<input type="text" name="token" value="${token || ''}"></input>`;
 	output += `<a id="refresh" onclick="saveFormData()" href="${auth_url}">Auth with Strava</a>`;
 	output += `<br>`;
@@ -142,12 +144,14 @@ app.get('/formClient.js', (req, res) => {
 });
 app.get('/code', (request, response) => {
 	const code = request?.query?.code;
+	logger.info("Calling /code with code",code);
 	if (!code) {
 		response.send(getOptionForm());
 	}
 	else {
-		getAuthToken(code).then( token => {
-			response.send(getOptionForm(token));
+		getAuthToken(code).then( ({access_token,athleteID})  => {
+			logger.info("Got token",access_token, "athleteid",athleteID);
+			response.send(getOptionForm(access_token,athleteID));
 		})
 		.catch( (e) => {
 			response.send(getOptionForm());
@@ -158,14 +162,19 @@ app.get('/code', (request, response) => {
 
 app.get('/coderefresh', (request, response) => {
 	const code = request?.query?.code;
+	logger.info("Calling /coderefresh with code",code);
 	if (!code) {
+		logger.debug("No code, so direct to option form");
 		response.send(getOptionForm());
 	}
 	else {
-		getAuthToken(code).then( token => {
-			response.send(getOptionForm(token,true));
+		logger.debug("code, so calling promise");
+		getAuthToken(code).then( ({access_token,athleteID})  => {
+			logger.info("Got token",access_token, "athleteid",athleteID);
+			response.send(getOptionForm(access_token,athleteID,true));
 		})
 		.catch( (e) => {
+			logger.error("error with token",e);
 			response.send(getOptionForm());
 		});
 	}
@@ -253,7 +262,11 @@ app.get('/geojson/:outfile', (request, response) => {
 app.use(express.static('out'));
 
 // leaflet source files
-app.use('/leaflet', express.static('node_modules/leaflet/dist'))
+app.use('/leaflet', express.static('node_modules/leaflet/dist'));
+
+// css and other misc
+app.use('/assets', express.static('src/assets'));
+
 
 const _getInitialData = async (request,response) => {
 	let opts = request.query;
@@ -264,7 +277,7 @@ const _getInitialData = async (request,response) => {
 	}
 	const lat = opts.location_center_lat || config.default_latitude;
 	const long = opts.location_center_long || config.default_longitude;
-	logger.trace("options: ",opts);
+	logger.debug("options: ",opts);
 	const data = await getStuff(opts);
 	logger.trace("DATA",data);
 	if (!data) {
@@ -301,6 +314,16 @@ const getDaysInMonth = (monthYearStr) => {
   const month = new Date(`${monthStr} 1, ${yearStr}`).getMonth(); // convert month name to month index
   const year = parseInt(yearStr, 10);
 
+  const now = new Date();
+  const currentYear = `${now.getFullYear()}`;
+  const currentMonth = now.toLocaleString('default', { month: 'short' });
+  // use single equals, because one is number and the other is string
+  if (monthStr === currentMonth && yearStr == currentYear) {
+	// If we are in the current month, return days to today
+        const dayBucket = new Date(now).toLocaleString('default',{day: 'numeric', month: 'short', year: 'numeric'});
+	return now.getDate();
+  }
+
   // Create a date for the first day of the next month, then subtract 1 day
   return new Date(year, month + 1, 0).getDate();
 }
@@ -314,6 +337,7 @@ app.get('/stats', async (request, response) => {
 	const types = {};
 	const buckets = {};
 	const dayBuckets = {};
+	const dayBucketsMoving = {};
 	if (result) {
 		const {data,opts,lat,long} = result;
 		const {activities} = data;
@@ -327,8 +351,22 @@ app.get('/stats', async (request, response) => {
 			const startDate = Date.parse(track.start_date);
 			const bucket = new Date(track.start_date).toLocaleString('default',{month: 'short', year: 'numeric'});
 			const dayBucket = new Date(track.start_date).toLocaleString('default',{day: 'numeric', month: 'short', year: 'numeric'});
-			buckets[bucket] = (buckets[bucket] || 0) + track.elapsed_time;
-			dayBuckets[dayBucket] = (dayBuckets[dayBucket] || 0) + track.elapsed_time;
+			buckets[bucket] = buckets.hasOwnProperty(bucket) ? buckets[bucket] : { elapsed: 0, moving : 0 };
+			buckets[bucket].elapsed = (buckets[bucket]?.elapsed || 0) + track.elapsed_time;
+			buckets[bucket].moving = (buckets[bucket]?.moving || 0) + track.moving_time;
+			dayBuckets[dayBucket] = dayBuckets.hasOwnProperty(dayBucket) ? dayBuckets[dayBucket] : { elapsed: 0, movine: 0};
+			dayBuckets[dayBucket].elapsed = (dayBuckets[dayBucket]?.elapsed || 0) + track.elapsed_time;
+			dayBuckets[dayBucket].moving = (dayBuckets[dayBucket]?.moving || 0) + track.moving_time;
+
+			if (foot.indexOf(track.type) !== -1) {
+				buckets[bucket].steps = (buckets[bucket].moving || 0) + track.steps;
+				dayBuckets[dayBucket].steps = (dayBuckets[dayBucket].moving || 0) + track.steps;
+
+				buckets[bucket].distance = (buckets[bucket].distance || 0) + track.distance;
+				buckets[bucket].climb = (buckets[bucket].climb || 0) + track.elevation_gain;
+				dayBuckets[dayBucket].distance = (dayBuckets[dayBucket].distance || 0) + track.distance;
+				dayBuckets[dayBucket].climb = (dayBuckets[dayBucket].climb || 0) + track.elevation_gain;
+			}
 
 			types[track.type] = (types[track.type] || 0) + 1;
 			if (earliest === null || startDate < earliest) {
@@ -347,22 +385,30 @@ app.get('/stats', async (request, response) => {
 		const days = (latest-earliest)/1000/60/60/24;
 		const hours = elapsed/60/60;
 		const moving_hours = moving/60/60;
-		let html =  "<h1>Stats</h1>";
+		let html='';
+		html += `<html><head><title>Strava Stats</title><link rel="stylesheet" href="/assets/basic.css"></head>`;
+		html += `<body>`;
+		html +=  "<h1>Stats</h1>";
 		html += '<a href="javascript:history.back()">go back</a>';
 
-		html += `<p>Total time: ${Number.parseFloat(hours).toFixed(2)} hours</p>`;
-		html += `<p>Activites : ${activities.length}</p>`;
-		html += `<p>First     : ${new Date(earliest).toLocaleString()}</p>`;
-		html += `<p>Last      : ${new Date(latest).toLocaleString()}</p>`;
-		html += `<p>Days      : ${Number.parseFloat(days).toFixed(2)} days</p>`
-		html += `<p>Hours/Day : ${Number.parseFloat(hours/days).toFixed(2)} hours</p>`
-		html += `<p>Moving Hours/Day : ${Number.parseFloat(moving_hours/days).toFixed(2)} hours</p>`
-		html += `<p>Actvities/Day : ${Number.parseFloat(activities.length/days).toFixed(2)} activities</p>`
-		html += `<p>Yearly Estimate: ${Number.parseFloat((hours/days)*365).toFixed(2)} hours</p>`;
-		html += `<p>Yearly Moving Estimate: ${Number.parseFloat((moving_hours/days)*365).toFixed(2)} hours</p>`;
+		html += `<table class="styled-table"><thead><tr><th>Description</th><th>Value</th></tr></thead>`;
+		html += `<tbody>`;
+		html += `<tr><td>Total time</td><td> ${Number.parseFloat(hours).toFixed(2)} hours</td></tr>`;
+		html += `<tr><td>Activites </td><td> ${activities.length}</td></tr>`;
+		html += `<tr><td>First     </td><td> ${new Date(earliest).toLocaleString()}</td></tr>`;
+		html += `<tr><td>Last      </td><td> ${new Date(latest).toLocaleString()}</td></tr>`;
+		html += `<tr><td>Days      </td><td> ${Number.parseFloat(days).toFixed(2)} days</td></tr>`
+		html += `<tr><td>Hours/Day </td><td> ${Number.parseFloat(hours/days).toFixed(2)} hours</td></tr>`
+		html += `<tr><td>Moving Hours/Day </td><td> ${Number.parseFloat(moving_hours/days).toFixed(2)}</td></tr>`;
+		html += `<tr><td>Moving Hours</td><td>${Number.parseFloat(moving_hours).toFixed(2)}</td></tr>`;
+		html += `<tr><td>Activities/Day </td><td> ${Number.parseFloat(activities.length/days).toFixed(2)} activities</td></tr>`
+		html += `<tr><td>Hours/Activity </td><td> ${Number.parseFloat(hours/activities.length).toFixed(2)} activities</td></tr>`
+		html += `<tr><td>Yearly Estimate</td><td> ${Number.parseFloat((hours/days)*365).toFixed(2)} hours</td></tr>`;
+		html += `<tr><td>Yearly Moving Estimate</td><td> ${Number.parseFloat((moving_hours/days)*365).toFixed(2)} hours</td></tr>`;
+		html += `</tbody></table>`;
 		const tracksWithMissingGear = badGear.map(track => {return `<a target="_blank" href="https://www.strava.com/activities/${track.id}">${track.name}</a><br />`; }).join('') || 'None';
 		html += `\n<h2>Tracks with missing gear:</h2>\n ${tracksWithMissingGear}`;
-		html += `\n<h2>Types</h2>\n<table><thead><tr><th>type</th><th>activities</th></tr></thead><tbody>`;
+		html += `\n<h2>Types</h2>\n<table class="styled-table"><thead><tr><th>type</th><th>activities</th></tr></thead><tbody>`;
 		html += Object.keys(types)
 			.sort((a,b) => { return types[a] - types[b]})
 			.map(type => {
@@ -371,20 +417,22 @@ app.get('/stats', async (request, response) => {
 			.join('\n');
 		html += `</tbody></table>`;
 		html += `\n<h2>Monthly stats (hours elapsed time)</h2>`;
-		html += `\n<table><thead><tr><th>Month</th><th>Total</th><th>Daily Average</th></tr></thead><tbody>`;
+		html += `\n<table class="styled-table"><thead><tr><th>Month</th><th>Total</th><th>Daily Average*</th></tr></thead><tbody>`;
 		html += Object.keys(buckets)
 			.sort((a,b) => { return new Date(a) - new Date(b)})
 			.map(bucket => {
 				return `<tr><td>${bucket}</td>`
-					+`<td>${Number.parseFloat(buckets[bucket]/60/60).toFixed(2)}</td>`
-					+`<td>${Number.parseFloat((buckets[bucket]/60/60) / getDaysInMonth(bucket)).toFixed(2)}</td></tr>`;
+					+`<td>${Number.parseFloat(buckets[bucket].elapsed/60/60).toFixed(2)}</td>`
+					+`<td>${Number.parseFloat((buckets[bucket].elapsed/60/60) / getDaysInMonth(bucket)).toFixed(2)}</td></tr>`;
 			})
 			.join('\n');
 		html += `</tbody></table>`;
-		html += `\n<h2>Daily stats (hours elapsed time)</h2>`;
-	html += `\n<table><thead><tr><th>Date</th><th>Daily</th><th>Year to Date</th></tr></thead><tbody>`;
+		html += `* current month is average daily to date`;
+		html += `\n<h2>Daily stats</h2>`;
+	html += `\n<table class="styled-table"><thead><tr><th>Date</th><th>Daily elapsed</th><th>YTD Elapsed</th><th>Daily moving</th><th>YTD moving</th><th>non moving</th></tr></thead><tbody>`;
 		let year =0;
 		let yearCount = 0;
+		let yearCountMoving = 0;
 		html += Object.keys(dayBuckets)
 			.sort((a,b) => { return new Date(a) - new Date(b)})
 			.map(bucket => {
@@ -392,15 +440,21 @@ app.get('/stats', async (request, response) => {
 				if (year != currentYear) {
 					year = currentYear;
 					yearCount = 0;
+					yearCountMoving = 0;
 				}
-				yearCount += dayBuckets[bucket];
+				yearCount += dayBuckets[bucket].elapsed;
+				yearCountMoving += dayBuckets[bucket].moving;
 				return `<tr><td>${bucket}</td>`
-					+`<td>${Number.parseFloat(dayBuckets[bucket]/60/60).toFixed(2)}</td>`
+					+`<td>${Number.parseFloat(dayBuckets[bucket].elapsed/60/60).toFixed(2)}</td>`
 					+`<td>${Number.parseFloat(yearCount/60/60).toFixed(2)}</td>`
+					+`<td>${Number.parseFloat(dayBuckets[bucket].moving/60/60).toFixed(2)}</td>`
+					+`<td>${Number.parseFloat(yearCountMoving/60/60).toFixed(2)}</td>`
+					+`<td>${Number.parseFloat(dayBuckets[bucket].elapsed/60/60 - dayBuckets[bucket].moving/60/60).toFixed(2)}</td>`
 					+`</tr>`;
 			})
 			.join('\n');
 		html += `</tbody></table>`;
+		html += `</body></html>`;
 		response.send(html);
 	}
 });
