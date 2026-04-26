@@ -203,14 +203,13 @@ const getMapHtml = ({kml = '', lat, long, tiles = 'osm', geoJson = '' } = {}) =>
 			const colors = ['red','green','yellow'];
 			let color = 0;
 			layers.forEach( kml => {
-				console.log("loop",color,kml);
 				if (kml) {
 					const colorToUse = colors[color];
 					color++;
 					fetch('/geojson/'+kml).then(function (response) {
 						response.text().then((geojson) => {
+							let highlighted = null;
 							// todo: actually use the colors
-							console.log("processing file:",kml,geojson);
 							const geojsonJSON = JSON.parse(geojson);
 							const mapinfo = document.getElementById('mapinfo').innerHTML;
 							let header = 'Number of tracks: '+geojsonJSON.features.length+' <a href="javascript:history.back()">go back</a>';
@@ -220,29 +219,47 @@ const getMapHtml = ({kml = '', lat, long, tiles = 'osm', geoJson = '' } = {}) =>
 							document.getElementById('mapinfo').innerHTML = header;
 							var defaultStyle = { color: colors[color], weight: 2, fillOpacity: 0.2 };
 							var highlightStyle = { color: "#ff0000", weight: 5, fillOpacity: 0.7 };
+							let highlightedLayer;
 
 							function highlightFeature(e) {
-							    var layer = e.target;
-							    layer.setStyle(highlightStyle);
+							    const layer = e.target;
 
-							    // Optional: Bring the layer to the front so the border is visible
-							    if (!L.Browser.ie && !L.Browser.opera && !L.Browser.edge) {
-								layer.bringToFront();
+							    if (highlightedLayer === layer) {
+								// If already highlighted, remove it (toggle off)
+								geoJsonLayer.resetStyle(layer);
+								highlightedLayer = null;
+							    } else {
+
+								    // Reset previous highlight if it exists
+								    if (highlightedLayer) {
+									geoJsonLayer.resetStyle(highlightedLayer);
+								    }
+
+								    // Apply new highlight style
+								    layer.setStyle({
+									weight: 5,
+									color: '#666',
+									dashArray: '',
+									fillOpacity: 0.7
+								    });
+
+								    layer.bringToFront();
+								    highlightedLayer = layer; // Track current selection
 							    }
 							}
-							function onEachFeature(feature, layer) {
-							    if (feature.properties && feature.properties.name) {
-								layer.bindPopup(feature.properties.name);
+
+							// Attach the event to your GeoJSON data
+							const geoJsonLayer = L.geoJson(geojsonJSON, {
+							    onEachFeature: function (feature, layer) {
+							        if (feature.properties && feature.properties.name) {
+									layer.bindPopup(feature.properties.name);
+								}
 								layer.on({
 								    click: highlightFeature
 								});
 							    }
-							}
-
-							L.geoJSON(geojsonJSON, {
-							    onEachFeature: onEachFeature
 							}).addTo(map);
-							//L.geoJSON(JSON.parse(geojson)).addTo(map);
+
 						});
 					}).catch(function (error) {
 						// There was an error
@@ -331,10 +348,8 @@ app.get('/process', async (request, response) => {
 		// get hulls
 		// use 0 buffer zone (they must touch)
 		const fileList = activities.map(activity => getCacheFileFromActivity(activity));
-		console.log("got fileList",fileList.length);
 		const hulls = getSpatialAnalysis(fileList);
 		//const hulls = getSpatialAnalysis(fileList, 0);
-		console.log("hulls",hulls);
 		const hullsKml = hulls.kml;
 		const hullsGeoJson = hulls.geoJSON;
 		const kmlTrack = data.kmlTrack;
