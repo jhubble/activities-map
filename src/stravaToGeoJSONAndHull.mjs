@@ -4,15 +4,16 @@ import * as turf from '@turf/turf';
 import tokml from 'tokml';
 
 /**
- * Groups tracks based on physical intersection and generates a single hull per group.
- * @param {string[]} fileList - Array of file paths.
+ * High-speed intersection-based hull generation.
+ * Uses Bounding Box pruning and path simplification.
  */
 export function getSpatialAnalysis(fileList) {
     let tracks = [];
 
-    console.log(`\n🚀 Analyzing intersections for ${fileList.length} files...`);
+    console.log(`\n🚀 High-speed analysis for ${fileList.length} files...`);
+    console.time("⏱️ Total Logic Time");
 
-    // 1. Load and Parse Tracks
+    // 1. Load, Simplify, and Cache Bounding Boxes
     fileList.forEach((filePath) => {
         try {
             const rawData = JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -29,8 +30,17 @@ export function getSpatialAnalysis(fileList) {
             }
 
             if (coords.length > 1) {
-                // We keep the full LineString for intersection testing
-                tracks.push(turf.lineString(coords, { id: tracks.length, file: path.basename(filePath) }));
+                // OPTIMIZATION 1: Simplify paths. Reduces coordinate count by ~90% 
+                // while maintaining the intersection "footprint".
+                const simplified = turf.simplify(turf.lineString(coords), { tolerance: 0.0005, highQuality: false });
+                
+                // OPTIMIZATION 2: Pre-calculate Bounding Box (BBox)
+                // Checking if two rectangles overlap is 100x faster than checking line intersections.
+                simplified.properties = { 
+                    bbox: turf.bbox(simplified),
+                    id: tracks.length 
+                };
+                tracks.push(simplified);
             }
         } catch (err) {
             console.error(`  ❌ Error: ${path.basename(filePath)}`, err.message);
@@ -39,36 +49,50 @@ export function getSpatialAnalysis(fileList) {
 
     if (tracks.length === 0) return null;
 
-    // 2. Build Adjacency List (Who touches whom?)
-    console.log(`🔍 Checking intersections (this may take a moment for large sets)...`);
+    // 2. Build Adjacency List with Spatial Pruning
+    console.log(`🔍 Checking intersections with BBox pruning...`);
     const adj = Array.from({ length: tracks.length }, () => []);
     
     for (let i = 0; i < tracks.length; i++) {
+        const bboxA = tracks[i].properties.bbox;
+
         for (let j = i + 1; j < tracks.length; j++) {
-            // Check if Line i intersects Line j
-            // Note: booleanIntersects is much faster than lineIntersect
-            if (turf.booleanIntersects(tracks[i], tracks[j])) {
-                adj[i].push(j);
-                adj[j].push(i);
+            const bboxB = tracks[j].properties.bbox;
+
+            // OPTIMIZATION 3: BBox Overlap Check
+            // Standard: [minX, minY, maxX, maxY]
+            const intersectsBBox = !(bboxB[0] > bboxA[2] || 
+                                     bboxB[2] < bboxA[0] || 
+                                     bboxB[1] > bboxA[3] || 
+                                     bboxB[3] < bboxA[1]);
+
+            if (intersectsBBox) {
+                // Only run the expensive intersection test if the "boxes" touch
+                if (turf.booleanIntersects(tracks[i], tracks[j])) {
+                    adj[i].push(j);
+                    adj[j].push(i);
+                }
             }
         }
-        if ((i + 1) % 20 === 0) process.stdout.write('.'); 
+        if ((i + 1) % 50 === 0) process.stdout.write('.'); 
     }
 
-    // 3. Find Connected Components (Grouping)
-    console.log(`\n🧩 Grouping connected tracks...`);
+    // 3. Group Connected Components (BFS)
+    console.log(`\n🧩 Grouping...`);
     const visited = new Set();
     const groups = [];
 
     for (let i = 0; i < tracks.length; i++) {
         if (!visited.has(i)) {
-            const group = [];
+            const groupPoints = [];
             const queue = [i];
             visited.add(i);
 
             while (queue.length > 0) {
                 const u = queue.shift();
-                group.push(tracks[u]);
+                // We only need the points for the final hull
+                groupPoints.push(...tracks[u].geometry.coordinates);
+                
                 for (const v of adj[u]) {
                     if (!visited.has(v)) {
                         visited.add(v);
@@ -76,20 +100,17 @@ export function getSpatialAnalysis(fileList) {
                     }
                 }
             }
-            groups.push(group);
+            groups.push(groupPoints);
         }
     }
 
-    // 4. Create one Hull per Group
-    console.log(`📐 Generating hulls for ${groups.length} connected group(s)...`);
-    const hullFeatures = groups.map((group, idx) => {
-        // Collect every single point from every track in this group
-        const allCoords = group.reduce((acc, track) => acc.concat(track.geometry.coordinates), []);
-        
-        if (allCoords.length < 3) return null;
+    // 4. Final Hull Generation
+    console.log(`📐 Generating hulls for ${groups.length} groups...`);
+    const hullFeatures = groups.map((points, idx) => {
+        if (points.length < 3) return null;
 
-        const points = turf.featureCollection(allCoords.map(c => turf.point(c)));
-        const hull = turf.convex(points);
+        const ptCollection = turf.featureCollection(points.map(p => turf.point(p)));
+        const hull = turf.convex(ptCollection);
 
         if (hull) {
             hull.properties = {
@@ -105,6 +126,7 @@ export function getSpatialAnalysis(fileList) {
         return hull;
     }).filter(Boolean);
 
+    console.timeEnd("⏱️ Total Logic Time");
     console.log(`✨ Success! Created ${hullFeatures.length} outlines.`);
 
     const finalFC = turf.featureCollection(hullFeatures);

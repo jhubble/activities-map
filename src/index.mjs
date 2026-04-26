@@ -218,9 +218,24 @@ const getMapHtml = ({kml = '', lat, long, tiles = 'osm', geoJson = '' } = {}) =>
 								header = mapinfo + " - " + header;
 							}
 							document.getElementById('mapinfo').innerHTML = header;
+							var defaultStyle = { color: colors[color], weight: 2, fillOpacity: 0.2 };
+							var highlightStyle = { color: "#ff0000", weight: 5, fillOpacity: 0.7 };
+
+							function highlightFeature(e) {
+							    var layer = e.target;
+							    layer.setStyle(highlightStyle);
+
+							    // Optional: Bring the layer to the front so the border is visible
+							    if (!L.Browser.ie && !L.Browser.opera && !L.Browser.edge) {
+								layer.bringToFront();
+							    }
+							}
 							function onEachFeature(feature, layer) {
 							    if (feature.properties && feature.properties.name) {
 								layer.bindPopup(feature.properties.name);
+								layer.on({
+								    click: highlightFeature
+								});
 							    }
 							}
 
