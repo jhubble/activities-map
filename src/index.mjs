@@ -29,6 +29,7 @@ const OPTIONS = {
 	lat_dist: { name:"Latitude distance", key:"location_distance_lat", default:config.location_distance_lat},
 	long_dist: { name:"Longitude distance", key:"location_distance_long", default:config.location_distance_long},
 	tiles: ['osm','none'],
+	showHulls: {values: [true, false], note: 'Will draw convex hulls around connected regions. Can take a long time with large data sets'},
 	tolerance: { default: config.tolerance, name:"Tolerance", key:"tolerance", note:"higher number=lower accuracy, smaller file. .5-1 is best, 10 is one city block, 0 is no smoothing"} 
 };
 
@@ -203,7 +204,7 @@ const getMapHtml = ({kml = '', lat, long, tiles = 'osm', geoJson = '' } = {}) =>
 			const colors = ['red','green','yellow'];
 			let color = 0;
 			layers.forEach( kml => {
-				if (kml) {
+				if (kml && kml !== 'null') {
 					const colorToUse = colors[color];
 					color++;
 					fetch('/geojson/'+kml).then(function (response) {
@@ -343,13 +344,13 @@ app.get('/process', async (request, response) => {
 	if (result) {
 		const {data,opts,lat,long} = result;
 		const activities = data.activities;
-		// get hulls
+		const showHulls = opts?.showHulls === 'true';
 		// use 0 buffer zone (they must touch)
 		const fileList = activities.map(activity => getCacheFileFromActivity(activity));
-		const hulls = getSpatialAnalysis(fileList);
+		const hulls = showHulls ? getSpatialAnalysis(fileList) : null;
 		//const hulls = getSpatialAnalysis(fileList, 0);
-		const hullsKml = hulls.kml;
-		const hullsGeoJson = hulls.geoJSON;
+		const hullsKml = hulls?.kml;
+		const hullsGeoJson = hulls?.geoJSON;
 		const kmlTrack = data.kmlTrack;
 		if (!kmlTrack) {
 			response.send('No data  found <a href="javascript:history.back()">go back</a>');
@@ -357,12 +358,12 @@ app.get('/process', async (request, response) => {
 		else {
 			const outputDate = `output_${Date.now()}`;
 			const kmlFileName =  `${outputDate}.kml`;
-			const hullGeoJsonFileName = `hull_${outputDate}.geojson`;
+			const hullGeoJsonFileName = showHulls ? `hull_${outputDate}.geojson` : null;
 
 			const hullGeoJsonFullPath = `${__dirname}/out/${hullGeoJsonFileName}`;
 			const tracksFullPath = `${__dirname}/out/${kmlFileName}`;
 			outputFile(kmlTrack, tracksFullPath);
-			outputFile(JSON.stringify(hullsGeoJson,null,2), hullGeoJsonFullPath);
+			hullsGeoJson && outputFile(JSON.stringify(hullsGeoJson,null,2), hullGeoJsonFullPath);
 			let html = `Download tracks: <a href="${kmlFileName}">${kmlFileName}</a>`;
 			html += getMapHtml({kml:kmlFileName, lat:lat, long: long, tiles:opts.tiles, geoJson:hullGeoJsonFileName});
 			response.send(html);
