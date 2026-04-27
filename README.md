@@ -54,3 +54,6 @@ Strava requires a premium membership for heatmaps. There is no ability to export
 This is a great tool. I had used it to generate maps.
 However, it had some trouble with kml export. I worked around it by copying the internal map structure and generating kml. However, it is also subject to API limits.
 
+## notes
+
+this version uses highlightable polygon, which doesn't help much
