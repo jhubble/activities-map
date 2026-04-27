@@ -191,11 +191,26 @@ const getMapHtml = ({kml = '', lat, long, tiles = 'osm', geoJson = '' } = {}) =>
 
 	const leaflet = `
                <link rel="stylesheet" type="text/css" href="/leaflet/leaflet.css" />
+		<script type="importmap">
+			{
+			  "imports": {
+			    "leaflet": "https://esm.sh/leaflet@1.9.4",
+			    "leaflet-highlightable-layers": "https://esm.sh/leaflet-highlightable-layers@4.0.4"
+			  }
+			}
+		</script>
                 <!-- Make sure you put this AFTER Leaflet's CSS -->
-                <script src="/leaflet/leaflet.js"></script>
+                <!-- <script src="/leaflet/leaflet.js"></script> -->
                 <div id="mapinfo"></div>
                 <div id="map" style="height: 800px; border: 1px solid black"></div>
-                <script>
+                <script type="module">
+			import L from "leaflet";
+			import * as HL from "leaflet-highlightable-layers";
+
+			// Define the constructor - check for both casing styles
+			const HLGeoJSON = HL.HighlightableGeoJson || HL.highlightableGeoJson;
+			const HLPolyline = HL.HighlightablePolyline || HL.highlightablePolyline;
+			const HLPolygon = HL.HighlightablePolygon || HL.highlightablePolygon;
 			const layers = [ '${kml}', '${geoJson}' ];
                         var map = L.map('map').setView([${lat}, ${long}], 13);
 			${tiles === 'osm' ? osmTiles : '' }
@@ -205,62 +220,79 @@ const getMapHtml = ({kml = '', lat, long, tiles = 'osm', geoJson = '' } = {}) =>
 			layers.forEach( kml => {
 				if (kml) {
 					const colorToUse = colors[color];
+					console.log("colortoUse",colorToUse);
 					color++;
 					fetch('/geojson/'+kml).then(function (response) {
 						response.text().then((geojson) => {
-							let highlighted = null;
-							// todo: actually use the colors
-							const geojsonJSON = JSON.parse(geojson);
-							const mapinfo = document.getElementById('mapinfo').innerHTML;
-							let header = 'Number of tracks: '+geojsonJSON.features.length+' <a href="javascript:history.back()">go back</a>';
-							if (mapinfo) {
-								header = mapinfo + " - " + header;
-							}
-							document.getElementById('mapinfo').innerHTML = header;
-							var defaultStyle = { color: colors[color], weight: 2, fillOpacity: 0.2 };
-							var highlightStyle = { color: "#ff0000", weight: 5, fillOpacity: 0.7 };
-							let highlightedLayer;
+						    const geojsonJSON = JSON.parse(geojson);
+						    let selectedLayer = null;
 
-							function highlightFeature(e) {
-							    const layer = e.target;
-
-							    if (highlightedLayer === layer) {
-								// If already highlighted, remove it (toggle off)
-								geoJsonLayer.resetStyle(layer);
-								highlightedLayer = null;
-							    } else {
-
-								    // Reset previous highlight if it exists
-								    if (highlightedLayer) {
-									geoJsonLayer.resetStyle(highlightedLayer);
+						    const geoJsonLayer = L.geoJson(geojsonJSON, {
+							// This function forces Leaflet to use the Highlightable classes
+							// instead of standard SVG paths
+							onEachFeature: (feature, layer) => {
+							    // Logic to handle clicks/toggling
+							    layer.on('click', (e) => {
+								if (selectedLayer === layer) {
+								    layer.setStyle({ highlighted: false, raised: false });
+								    selectedLayer = null;
+								} else {
+								    if (selectedLayer) {
+									selectedLayer.setStyle({ highlighted: false, raised: false });
 								    }
+								    layer.setStyle({ highlighted: true, raised: true });
+								    selectedLayer = layer;
+								}
+								L.DomEvent.stopPropagation(e);
+							    });
+							},
+							// Map the GeoJSON geometry to the correct Highlightable class
+							pointToLayer: (feature, latlng) => {
+							     // Optional: handle points/markers if needed
+							     return L.circleMarker(latlng);
+							}
+						    });
 
-								    // Apply new highlight style
-								    layer.setStyle({
-									weight: 5,
-									color: '#666',
-									dashArray: '',
-									fillOpacity: 0.7
-								    });
+						    // Manual processing to ensure Polygons and LineStrings are "Highlightable"
+						    geojsonJSON.features.forEach(feature => {
+							let layer;
+							const type = feature.geometry.type;
+							const styles = { color: colors[color], weight: 2, fillOpacity: 0.2 };
 
-								    layer.bringToFront();
-								    highlightedLayer = layer; // Track current selection
-							    }
+							if (type === "LineString" || type === "MultiLineString") {
+							    const latlngs = L.GeoJSON.coordsToLatLngs(feature.geometry.coordinates, (type === "LineString" ? 0 : 1));
+							    layer = new HLPolyline(latlngs, styles);
+							} 
+							else if (type === "Polygon" || type === "MultiPolygon") {
+							    const latlngs = L.GeoJSON.coordsToLatLngs(feature.geometry.coordinates, (type === "Polygon" ? 1 : 2));
+							    layer = new HLPolygon(latlngs, styles);
 							}
 
-							// Attach the event to your GeoJSON data
-							const geoJsonLayer = L.geoJson(geojsonJSON, {
-							    onEachFeature: function (feature, layer) {
-							        if (feature.properties && feature.properties.name) {
-									layer.bindPopup(feature.properties.name);
-								}
-								layer.on({
-								    click: highlightFeature
-								});
+							if (layer) {
+							    // Attach the popup if it exists in properties
+							    if (feature.properties && feature.properties.name) {
+								layer.bindPopup(feature.properties.name);
 							    }
-							}).addTo(map);
+							    
+							    // Standard toggle logic
+							    layer.on('click', function(e) {
+								if (selectedLayer && selectedLayer !== this) {
+								    selectedLayer.setStyle({ highlighted: false, raised: false });
+								}
+								
+								const isH = !this.options.highlighted;
+								this.setStyle({ highlighted: isH, raised: isH });
+								selectedLayer = isH ? this : null;
+								
+								L.DomEvent.stopPropagation(e);
+							    });
 
+							    layer.addTo(map);
+							}
+						    });
 						});
+
+
 					}).catch(function (error) {
 						// There was an error
 						logger.error(error);
