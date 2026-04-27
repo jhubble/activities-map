@@ -102,12 +102,22 @@ export function getSpatialAnalysis(fileList) {
         const hull = turf.convex(ptCollection);
 
         if (hull) {
-            // Calculate area in square miles
-            const areaSqMeters = turf.area(hull);
-            const areaSqMiles = (areaSqMeters * 0.000386102).toFixed(2);
+		// Calculate area in square miles
+		const areaSqMeters = turf.area(hull);
+		// Use the precise conversion factor
+		const areaSqMiles = (areaSqMeters * 0.000000386102).toFixed(4); 
+
+		// Safety check: If it's a tiny area, display in sq ft, otherwise sq miles
+		let nameString = "";
+		if (areaSqMiles < 0.001) {
+		    const areaSqFt = (areaSqMeters * 10.7639).toFixed(1);
+		    nameString = `Area ${idx + 1} (${areaSqFt} sq ft)`;
+		} else {
+		    nameString = `Area ${idx + 1} (${areaSqMiles} sq mi)`;
+		}
 
             hull.properties = {
-                name: `Area ${idx + 1} (${areaSqMiles} sq mi)`,
+                name: nameString,
                 stroke: "#FFFF00",
                 color: "#FFFF00",
                 fillColor: "#FFFF00",
