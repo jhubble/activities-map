@@ -22,7 +22,8 @@
     "leaflet": "^1.9.4",
     "log4js": "^6.9.1",
     "package-directory": "^8.1.0",
-    "simplify-geojson": "^1.0.5"
+    "simplify-geojson": "^1.0.5",
+    "tokml": "^0.4.0"
   },
   "overrides": {
     "form-data": "2.5.4",

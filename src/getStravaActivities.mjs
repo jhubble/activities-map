@@ -308,6 +308,12 @@ const processActivities = async ({token, payload, type, location={}, includePriv
 	return {trackData:kmlTracks,activities:desiredActivities};
 }
 
+export const getCacheFileFromActivity = (activity) => {
+	const id = activity.id;
+	const trackCacheFile = `${CACHE_DIR}/${id}.json`;
+	return trackCacheFile;
+}
+
 const processActivity = async (activity, token, force=false, tolerance=TOLERANCE) => {
 	logger.trace("Activity:",activity);
 	checkAPIInterval();
@@ -324,7 +330,7 @@ const processActivity = async (activity, token, force=false, tolerance=TOLERANCE
 	// end_latlng [lat,lng]
 	// private: (boolean)
 	const id = activity.id;
-	const trackCacheFile = `${CACHE_DIR}/${id}.json`;
+	const trackCacheFile = getCacheFileFromActivity(activity);
 	logger.debug("track cache file",trackCacheFile);
 	let stream = null;
 	if (!force && fs.existsSync(trackCacheFile)) {
