@@ -118,12 +118,12 @@ export function getSpatialAnalysis(fileList) {
 
             hull.properties = {
                 name: nameString,
-                stroke: "#FFFF00",
-                color: "#FFFF00",
-                fillColor: "#FFFF00",
+                stroke: "#CCCC00",
+                color: "#CCCC00",
+                fillColor: "#CCCC00",
                 "fill-opacity": 0.4,
                 weight: 3,
-                fill: "#FFFF00",
+                fill: "#CCCC00",
                 area_sq_mi: parseFloat(areaSqMiles)
             };
         }

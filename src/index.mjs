@@ -217,7 +217,7 @@ const getMapHtml = ({kml = '', lat, long, tiles = 'osm', geoJson = '' } = {}) =>
 								header = mapinfo + " - " + header;
 							}
 							document.getElementById('mapinfo').innerHTML = header;
-							var defaultStyle = { color: colors[color], weight: 2, fillOpacity: 0.2 };
+							var defaultStyle = { color: colorToUse, weight: 2, fillOpacity: 0.2 };
 							var highlightStyle = { color: "#ff0000", weight: 5, fillOpacity: 0.7 };
 							let highlightedLayer;
 
@@ -227,6 +227,7 @@ const getMapHtml = ({kml = '', lat, long, tiles = 'osm', geoJson = '' } = {}) =>
 							    if (highlightedLayer === layer) {
 								// If already highlighted, remove it (toggle off)
 								geoJsonLayer.resetStyle(layer);
+								layer.bringToBack();
 								highlightedLayer = null;
 							    } else {
 
@@ -236,12 +237,8 @@ const getMapHtml = ({kml = '', lat, long, tiles = 'osm', geoJson = '' } = {}) =>
 								    }
 
 								    // Apply new highlight style
-								    layer.setStyle({
-									weight: 5,
-									color: '#666',
-									dashArray: '',
-									fillOpacity: 0.7
-								    });
+								    layer.setStyle(highlightStyle);
+
 
 								    layer.bringToFront();
 								    highlightedLayer = layer; // Track current selection
@@ -254,6 +251,7 @@ const getMapHtml = ({kml = '', lat, long, tiles = 'osm', geoJson = '' } = {}) =>
 							        if (feature.properties && feature.properties.name) {
 									layer.bindPopup(feature.properties.name);
 								}
+								layer.setStyle(defaultStyle);
 								layer.on({
 								    click: highlightFeature
 								});
