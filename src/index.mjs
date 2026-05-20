@@ -350,7 +350,7 @@ app.get('/process', async (request, response) => {
 		const showHulls = opts?.showHulls === 'true';
 		// use 0 buffer zone (they must touch)
 		const fileList = activities.map(activity => getCacheFileFromActivity(activity));
-		const hulls = showHulls ? getSpatialAnalysis(fileList,1,tolerance) : null;
+		const hulls = showHulls ? getSpatialAnalysis(fileList,.11,tolerance) : null;
 		//const hulls = getSpatialAnalysis(fileList, 0);
 		const hullsKml = hulls?.kml;
 		const hullsGeoJson = hulls?.geoJSON;

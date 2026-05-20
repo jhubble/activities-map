@@ -3,15 +3,14 @@
 // Other takes tolerance from form and divides by 10000
 //const tol = 0.0005;
 // const tol = 0.000006;
-
 import fs from 'fs';
 import path from 'path';
 import * as turf from '@turf/turf';
 import tokml from 'tokml';
 
 /**
- * Advanced track analyzer with Union-Find clustering, track mileage aggregation,
- * and cross-hull spatial relationship detection.
+ * Advanced track analyzer with track counts, mileage aggregation,
+ * and area-sorted layer stacking for optimal Leaflet rendering.
  */
 export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simplifyTolerance = 0.0003) {
     console.log(`\n🚀 Processing ${fileList.length} files...`);
@@ -39,10 +38,7 @@ export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simpl
             if (coords.length < 2) return;
 
             const rawLine = turf.lineString(coords);
-
-            // Calculate track distance in miles
             const trackMiles = turf.length(rawLine, { units: 'miles' });
-
             const simplified = turf.simplify(rawLine, { tolerance: simplifyTolerance, highQuality: false });
             const collisionPoly = turf.buffer(simplified, fudgeKm, { units: 'kilometers' });
 
@@ -97,7 +93,7 @@ export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simpl
             const itemB = items[j];
             const bboxB = itemB.bbox;
 
-            const overlapsBBox = !(bboxB[0] > bboxA[2] || bboxB[2] < bboxA[0] ||
+            const overlapsBBox = !(bboxB[0] > bboxA[2] || bboxB[2] < bboxA[0] || 
                                    bboxB[1] > bboxA[3] || bboxB[3] < bboxA[1]);
 
             if (overlapsBBox && turf.booleanIntersects(itemA.collisionPoly, itemB.collisionPoly)) {
@@ -106,17 +102,18 @@ export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simpl
         }
     }
 
-    // 4. Aggregate Points and Track Mileage
+    // 4. Aggregate Points, Track Mileage, and Track Counts
     console.log(`🧩 Aggregating data into clusters...`);
     const groupMap = new Map();
     for (let i = 0; i < N; i++) {
         const root = find(i);
         if (!groupMap.has(root)) {
-            groupMap.set(root, { points: [], totalTrackMiles: 0 });
+            groupMap.set(root, { points: [], totalTrackMiles: 0, trackCount: 0 });
         }
         const data = groupMap.get(root);
         data.points.push(...items[i].rawPoints);
         data.totalTrackMiles += items[i].trackMiles;
+        data.trackCount += 1; // Increment track count for this group
     }
 
     // 5. Generate Initial Hulls
@@ -132,18 +129,17 @@ export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simpl
 
         if (hull) {
             const areaSqMiles = turf.area(hull) * 0.000000386102;
-
-            // Prime properties with internal stats
+            
             hull.properties = {
                 id: idx++,
                 area_sq_mi: parseFloat(areaSqMiles.toFixed(2)),
                 total_track_mi: parseFloat(data.totalTrackMiles.toFixed(2)),
-                relationship: "Independent",
+                track_count: data.trackCount, // Save track count to properties
+                relationship: "Independent", 
                 related_to: []
             };
-
-            // Cache bbox for downstream relationship checks
-            hull.bbox = turf.bbox(hull);
+            
+            hull.bbox = turf.bbox(hull); 
             tempHulls.push(hull);
         }
     }
@@ -152,7 +148,7 @@ export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simpl
     console.log(`📡 Analyzing relationships between hulls...`);
     for (let i = 0; i < tempHulls.length; i++) {
         for (let j = 0; j < tempHulls.length; j++) {
-            if (i === j) Venice: continue;
+            if (i === j) continue;
 
             const hullA = tempHulls[i];
             const hullB = tempHulls[j];
@@ -160,8 +156,7 @@ export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simpl
             // Only evaluate if Hull B is strictly larger in area than Hull A
             if (hullB.properties.area_sq_mi <= hullA.properties.area_sq_mi) continue;
 
-            // Bbox check
-            const overlaps = !(hullB.bbox[0] > hullA.bbox[2] || hullB.bbox[2] < hullA.bbox[0] ||
+            const overlaps = !(hullB.bbox[0] > hullA.bbox[2] || hullB.bbox[2] < hullA.bbox[0] || 
                                hullB.bbox[1] > hullA.bbox[3] || hullB.bbox[3] < hullA.bbox[1]);
 
             if (overlaps) {
@@ -169,7 +164,6 @@ export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simpl
                     hullA.properties.relationship = "Fully Contained";
                     hullA.properties.related_to.push(`Area Component ${hullB.properties.id}`);
                 } else if (turf.booleanIntersects(hullA, hullB)) {
-                    // Only mark as intersecting if it hasn't already been marked as fully contained by a larger hull
                     if (hullA.properties.relationship !== "Fully Contained") {
                         hullA.properties.relationship = "Intersects";
                     }
@@ -179,17 +173,22 @@ export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simpl
         }
     }
 
-    // 7. Final Naming and Formatting
+    // 7. Sort Hulls by Area (Descending) for Layer Stacking
+    // This places large polygons first in the array so small ones render on top.
+    tempHulls.sort((a, b) => b.properties.area_sq_mi - a.properties.area_sq_mi);
+
+    // 8. Final Naming and Formatting
     const finalFeatures = tempHulls.map(hull => {
         const props = hull.properties;
         let relationshipContext = "";
-
+        
         if (props.relationship !== "Independent") {
             relationshipContext = ` [${props.relationship} inside ${props.related_to.join(', ')}]`;
         }
 
-        props.name = `Area Component ${props.id} (${props.area_sq_mi} sq mi) - Total Track: ${props.total_track_mi} mi${relationshipContext}`;
-
+        // Updated naming convention to include track counts
+        props.name = `Area Component ${props.id} (${props.area_sq_mi} sq mi) - Tracks: ${props.track_count}, Total Distance: ${props.total_track_mi} mi${relationshipContext}`;
+        
         // Leaflet / KML Styles
         props.stroke = "#FFFF00";
         props.color = "#FFFF00";
@@ -199,8 +198,7 @@ export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simpl
         props.weight = 3;
         props.fill = "#FFFF00";
 
-        // Clean runtime properties before exporting
-        delete hull.bbox;
+        delete hull.bbox; 
 
         return hull;
     });
