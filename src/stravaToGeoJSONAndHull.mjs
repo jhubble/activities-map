@@ -8,27 +8,24 @@ import tokml from 'tokml';
 // Other takes tolerance from form and divides by 10000
 //const tol = 0.0005;
 // const tol = 0.000006;
+
 /**
- * Optimally groups and merges connected tracks on-the-fly during parsing.
- * @param {string[]} fileList - Array of file paths.
- * @param {number} [intersectionFudgeMeters=10] - Distance tolerance to bridge visual intersections.
- * @param {number} [simplifyTolerance=0.0003] - Tolerance for simplifying paths before testing intersections.
+ * High-speed track grouping via Union-Find and deferred Hull generation.
+ * Eliminates iterative turf.union memory bloat and stack overflows.
  */
 export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simplifyTolerance = 0.0003) {
-    // Array of groups: each group contains { rawPoints: [lng,lat][], collisionPolygon: Feature }
-    let groups = [];
-
-    console.log(`\n🚀 Processing ${fileList.length} files with On-the-Fly Merging...`);
+    console.log(`\n🚀 Processing ${fileList.length} files with Fast Union-Find...`);
     console.time("⏱️ Total Execution Time");
 
     const fudgeKm = intersectionFudgeMeters / 1000;
+    let items = [];
 
+    // 1. Ingest, Lightweight Simplify, and Pre-calculate Footprints
     fileList.forEach((filePath, index) => {
         try {
             const rawData = JSON.parse(fs.readFileSync(filePath, 'utf8'));
             let coords = [];
 
-            // 1. Standard Extraction
             if (Array.isArray(rawData)) {
                 const latLngObj = rawData.find(i => i.type === 'latlng');
                 if (latLngObj?.data) coords = latLngObj.data.map(c => [c[1], c[0]]);
@@ -41,96 +38,107 @@ export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simpl
 
             if (coords.length < 2) return;
 
-            // 2. Prepare the incoming track's collision footprint
+            // Generate an approximate collision buffer to detect visual intersection gaps
             const rawLine = turf.lineString(coords);
             const simplified = turf.simplify(rawLine, { tolerance: simplifyTolerance, highQuality: false });
-            const incomingCollision = turf.buffer(simplified, fudgeKm, { units: 'kilometers' });
-            const incomingBbox = turf.bbox(incomingCollision);
+            const collisionPoly = turf.buffer(simplified, fudgeKm, { units: 'kilometers' });
 
-            // Track indices of existing groups that this new track intersects with
-            let matchingGroupIndices = [];
+            items.push({
+                id: items.length,
+                file: path.basename(filePath),
+                rawPoints: coords,
+                collisionPoly: collisionPoly,
+                bbox: turf.bbox(collisionPoly)
+            });
 
-            for (let i = 0; i < groups.length; i++) {
-                const group = groups[i];
-
-                // Fast Bounding Box check
-                const overlapsBBox = !(incomingBbox[0] > group.bbox[2] || incomingBbox[2] < group.bbox[0] ||
-                                       incomingBbox[1] > group.bbox[3] || incomingBbox[3] < group.bbox[1]);
-
-                if (overlapsBBox) {
-                    if (turf.booleanIntersects(incomingCollision, group.collisionPolygon)) {
-                        matchingGroupIndices.push(i);
-                    }
-                }
-            }
-
-            // 3. Resolve Merging Logic
-            if (matchingGroupIndices.length === 0) {
-                // Scenario A: Fresh track doesn't touch anything. Create a new group.
-                groups.push({
-                    rawPoints: coords,
-                    collisionPolygon: incomingCollision,
-                    bbox: incomingBbox
-                });
-            } else if (matchingGroupIndices.length === 1) {
-                // Scenario B: Touches exactly one group. Append points and fuse collision geometry.
-                const targetIdx = matchingGroupIndices[0];
-                groups[targetIdx].rawPoints.push(...coords);
-
-                const unioned = turf.union(turf.featureCollection([groups[targetIdx].collisionPolygon, incomingCollision]));
-                if (unioned) {
-                    groups[targetIdx].collisionPolygon = unioned;
-                    groups[targetIdx].bbox = turf.bbox(unioned);
-                }
-            } else {
-                // Scenario C: The "Bridge" Track. It connects multiple previously separated groups.
-                const targetIdx = matchingGroupIndices[0];
-                let combinedPoints = [...groups[targetIdx].rawPoints, ...coords];
-                let collisionCollection = [groups[targetIdx].collisionPolygon, incomingCollision];
-
-                // Gather data from the other matching groups and mark them for deletion
-                for (let k = 1; k < matchingGroupIndices.length; k++) {
-                    const extraIdx = matchingGroupIndices[k];
-                    combinedPoints.push(...groups[extraIdx].rawPoints);
-                    collisionCollection.push(groups[extraIdx].collisionPolygon);
-                }
-
-                // Remove the merged groups from the main array (descending order to keep indices valid)
-                for (let k = matchingGroupIndices.length - 1; k > 0; k--) {
-                    groups.splice(matchingGroupIndices[k], 1);
-                }
-
-                // Update the root group with all combined assets
-                groups[targetIdx].rawPoints = combinedPoints;
-                const grandUnion = turf.union(turf.featureCollection(collisionCollection));
-                if (grandUnion) {
-                    groups[targetIdx].collisionPolygon = grandUnion;
-                    groups[targetIdx].bbox = turf.bbox(grandUnion);
-                }
-            }
-
-            if ((index + 1) % 25 === 0 || index === fileList.length - 1) {
-                console.log(`  📂 Processed ${index + 1}/${fileList.length} files... Active groups: ${groups.length}`);
-            }
-
+            if ((index + 1) % 100 === 0) console.log(`  📂 Loaded ${index + 1} files...`);
         } catch (err) {
-            console.error(`  ❌ Error processing file:`, err.message);
+            console.error(`  ❌ Error parsing file:`, err.message);
         }
     });
 
-    // 4. Generate Polygons from final grouped points
-    console.log(`\n📐 Constructing final convex hulls for ${groups.length} distinct system(s)...`);
-    const hullFeatures = groups.map((group, idx) => {
-        if (group.rawPoints.length < 3) return null;
+    const N = items.length;
+    if (N === 0) return null;
 
-        const ptCollection = turf.featureCollection(group.rawPoints.map(p => turf.point(p)));
+    // 2. Initialize Union-Find (Disjoint-Set Forest)
+    const parent = new Int32Array(N);
+    for (let i = 0; i < N; i++) parent[i] = i;
+
+    function find(i) {
+        let root = i;
+        while (root !== parent[root]) {
+            root = parent[root];
+        }
+        // Path compression
+        let curr = i;
+        while (curr !== root) {
+            let nxt = parent[curr];
+            parent[curr] = root;
+            curr = nxt;
+        }
+        return root;
+    }
+
+    function union(i, j) {
+        const rootI = find(i);
+        const rootJ = find(j);
+        if (rootI !== rootJ) {
+            parent[rootI] = rootJ;
+        }
+    }
+
+    // 3. Process Intersections Using Bounding Box Filtering
+    console.log(`🔍 Mapping spatial intersections...`);
+    for (let i = 0; i < N; i++) {
+        const itemA = items[i];
+        const bboxA = itemA.bbox;
+
+        for (let j = i + 1; j < N; j++) {
+            // Skip checking if they are already confirmed to be in the same network
+            if (find(i) === find(j)) continue;
+
+            const itemB = items[j];
+            const bboxB = itemB.bbox;
+
+            // Highly performant bounding box overlap check
+            const overlapsBBox = !(bboxB[0] > bboxA[2] || bboxB[2] < bboxA[0] || 
+                                   bboxB[1] > bboxA[3] || bboxB[3] < bboxA[1]);
+
+            if (overlapsBBox) {
+                if (turf.booleanIntersects(itemA.collisionPoly, itemB.collisionPoly)) {
+                    union(i, j);
+                }
+            }
+        }
+    }
+
+    // 4. Collect Point Aggregates via Compressed Groups
+    console.log(`🧩 Aggregating structural clusters...`);
+    const groupMap = new Map();
+    for (let i = 0; i < N; i++) {
+        const root = find(i);
+        if (!groupMap.has(root)) {
+            groupMap.set(root, []);
+        }
+        groupMap.get(root).push(...items[i].rawPoints);
+    }
+
+    // 5. Generate Final Hulls
+    console.log(`📐 Constructing final hulls for ${groupMap.size} system(s)...`);
+    let idx = 1;
+    const hullFeatures = [];
+
+    for (const [rootId, points] of groupMap.entries()) {
+        if (points.length < 3) continue;
+
+        const ptCollection = turf.featureCollection(points.map(p => turf.point(p)));
         const hull = turf.convex(ptCollection);
 
         if (hull) {
             const areaSqMiles = (turf.area(hull) * 0.000000386102).toFixed(2);
 
             hull.properties = {
-                name: `Area Component ${idx + 1} (${areaSqMiles} sq mi)`,
+                name: `Area Component ${idx++} (${areaSqMiles} sq mi)`,
                 stroke: "#FFFF00",
                 color: "#FFFF00",
                 fillColor: "#FFFF00",
@@ -139,9 +147,9 @@ export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simpl
                 fill: "#FFFF00",
                 area_sq_mi: parseFloat(areaSqMiles)
             };
+            hullFeatures.push(hull);
         }
-        return hull;
-    }).filter(Boolean);
+    }
 
     console.timeEnd("⏱️ Total Execution Time");
     console.log(`✨ Success! Output contains ${hullFeatures.length} clean outlines.\n`);
