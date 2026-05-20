@@ -29,12 +29,15 @@ export function getSpatialAnalysis(fileList) {
                 });
             }
 
+		console.log("simplifying");
             if (coords.length > 1) {
                 // Simplify to speed up intersection math without losing hull integrity
 		// TODO: Use the already simplified versions in KML so that we match
 		    // This uses a higher number which does more simplification
 		    // Other takes tolerance from form and divides by 10000
-                const simplified = turf.simplify(turf.lineString(coords), { tolerance: 0.0005, highQuality: false });
+		//const tol = 0.0005;
+		const tol = 0.000006;
+                const simplified = turf.simplify(turf.lineString(coords), { tolerance: tol, highQuality: true });
                 
                 simplified.properties = { 
                     bbox: turf.bbox(simplified),
