@@ -343,11 +343,14 @@ app.get('/process', async (request, response) => {
 	const result = await _getInitialData(request, response);
 	if (result) {
 		const {data,opts,lat,long} = result;
+		const tolerance = opts.tolerance/10000;
+		logger.info("TOLERANCE", opts.tolerance, " - adjusted value used:",tolerance);
+		
 		const activities = data.activities;
 		const showHulls = opts?.showHulls === 'true';
 		// use 0 buffer zone (they must touch)
 		const fileList = activities.map(activity => getCacheFileFromActivity(activity));
-		const hulls = showHulls ? getSpatialAnalysis(fileList) : null;
+		const hulls = showHulls ? getSpatialAnalysis(fileList,1,tolerance) : null;
 		//const hulls = getSpatialAnalysis(fileList, 0);
 		const hullsKml = hulls?.kml;
 		const hullsGeoJson = hulls?.geoJSON;

@@ -1,26 +1,26 @@
-import fs from 'fs';
-import path from 'path';
-import * as turf from '@turf/turf';
-import tokml from 'tokml';
-
 // TODO: Use the already simplified versions in KML so that we match
 // This uses a higher number which does more simplification
 // Other takes tolerance from form and divides by 10000
 //const tol = 0.0005;
 // const tol = 0.000006;
 
+import fs from 'fs';
+import path from 'path';
+import * as turf from '@turf/turf';
+import tokml from 'tokml';
+
 /**
- * High-speed track grouping via Union-Find and deferred Hull generation.
- * Eliminates iterative turf.union memory bloat and stack overflows.
+ * Advanced track analyzer with Union-Find clustering, track mileage aggregation,
+ * and cross-hull spatial relationship detection.
  */
 export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simplifyTolerance = 0.0003) {
-    console.log(`\n🚀 Processing ${fileList.length} files with Fast Union-Find...`);
+    console.log(`\n🚀 Processing ${fileList.length} files...`);
     console.time("⏱️ Total Execution Time");
 
     const fudgeKm = intersectionFudgeMeters / 1000;
     let items = [];
 
-    // 1. Ingest, Lightweight Simplify, and Pre-calculate Footprints
+    // 1. Ingest, Simplify, and Calculate Track Lengths
     fileList.forEach((filePath, index) => {
         try {
             const rawData = JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -38,15 +38,18 @@ export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simpl
 
             if (coords.length < 2) return;
 
-            // Generate an approximate collision buffer to detect visual intersection gaps
             const rawLine = turf.lineString(coords);
+
+            // Calculate track distance in miles
+            const trackMiles = turf.length(rawLine, { units: 'miles' });
+
             const simplified = turf.simplify(rawLine, { tolerance: simplifyTolerance, highQuality: false });
             const collisionPoly = turf.buffer(simplified, fudgeKm, { units: 'kilometers' });
 
             items.push({
                 id: items.length,
-                file: path.basename(filePath),
                 rawPoints: coords,
+                trackMiles: trackMiles,
                 collisionPoly: collisionPoly,
                 bbox: turf.bbox(collisionPoly)
             });
@@ -60,16 +63,13 @@ export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simpl
     const N = items.length;
     if (N === 0) return null;
 
-    // 2. Initialize Union-Find (Disjoint-Set Forest)
+    // 2. Union-Find Setup
     const parent = new Int32Array(N);
     for (let i = 0; i < N; i++) parent[i] = i;
 
     function find(i) {
         let root = i;
-        while (root !== parent[root]) {
-            root = parent[root];
-        }
-        // Path compression
+        while (root !== parent[root]) root = parent[root];
         let curr = i;
         while (curr !== root) {
             let nxt = parent[curr];
@@ -82,79 +82,133 @@ export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simpl
     function union(i, j) {
         const rootI = find(i);
         const rootJ = find(j);
-        if (rootI !== rootJ) {
-            parent[rootI] = rootJ;
-        }
+        if (rootI !== rootJ) parent[rootI] = rootJ;
     }
 
-    // 3. Process Intersections Using Bounding Box Filtering
+    // 3. Process Intersections
     console.log(`🔍 Mapping spatial intersections...`);
     for (let i = 0; i < N; i++) {
         const itemA = items[i];
         const bboxA = itemA.bbox;
 
         for (let j = i + 1; j < N; j++) {
-            // Skip checking if they are already confirmed to be in the same network
             if (find(i) === find(j)) continue;
 
             const itemB = items[j];
             const bboxB = itemB.bbox;
 
-            // Highly performant bounding box overlap check
-            const overlapsBBox = !(bboxB[0] > bboxA[2] || bboxB[2] < bboxA[0] || 
+            const overlapsBBox = !(bboxB[0] > bboxA[2] || bboxB[2] < bboxA[0] ||
                                    bboxB[1] > bboxA[3] || bboxB[3] < bboxA[1]);
 
-            if (overlapsBBox) {
-                if (turf.booleanIntersects(itemA.collisionPoly, itemB.collisionPoly)) {
-                    union(i, j);
+            if (overlapsBBox && turf.booleanIntersects(itemA.collisionPoly, itemB.collisionPoly)) {
+                union(i, j);
+            }
+        }
+    }
+
+    // 4. Aggregate Points and Track Mileage
+    console.log(`🧩 Aggregating data into clusters...`);
+    const groupMap = new Map();
+    for (let i = 0; i < N; i++) {
+        const root = find(i);
+        if (!groupMap.has(root)) {
+            groupMap.set(root, { points: [], totalTrackMiles: 0 });
+        }
+        const data = groupMap.get(root);
+        data.points.push(...items[i].rawPoints);
+        data.totalTrackMiles += items[i].trackMiles;
+    }
+
+    // 5. Generate Initial Hulls
+    console.log(`📐 Constructing base hulls...`);
+    let tempHulls = [];
+    let idx = 1;
+
+    for (const [rootId, data] of groupMap.entries()) {
+        if (data.points.length < 3) continue;
+
+        const ptCollection = turf.featureCollection(data.points.map(p => turf.point(p)));
+        const hull = turf.convex(ptCollection);
+
+        if (hull) {
+            const areaSqMiles = turf.area(hull) * 0.000000386102;
+
+            // Prime properties with internal stats
+            hull.properties = {
+                id: idx++,
+                area_sq_mi: parseFloat(areaSqMiles.toFixed(2)),
+                total_track_mi: parseFloat(data.totalTrackMiles.toFixed(2)),
+                relationship: "Independent",
+                related_to: []
+            };
+
+            // Cache bbox for downstream relationship checks
+            hull.bbox = turf.bbox(hull);
+            tempHulls.push(hull);
+        }
+    }
+
+    // 6. Cross-Hull Relationship Identification
+    console.log(`📡 Analyzing relationships between hulls...`);
+    for (let i = 0; i < tempHulls.length; i++) {
+        for (let j = 0; j < tempHulls.length; j++) {
+            if (i === j) Venice: continue;
+
+            const hullA = tempHulls[i];
+            const hullB = tempHulls[j];
+
+            // Only evaluate if Hull B is strictly larger in area than Hull A
+            if (hullB.properties.area_sq_mi <= hullA.properties.area_sq_mi) continue;
+
+            // Bbox check
+            const overlaps = !(hullB.bbox[0] > hullA.bbox[2] || hullB.bbox[2] < hullA.bbox[0] ||
+                               hullB.bbox[1] > hullA.bbox[3] || hullB.bbox[3] < hullA.bbox[1]);
+
+            if (overlaps) {
+                if (turf.booleanContains(hullB, hullA)) {
+                    hullA.properties.relationship = "Fully Contained";
+                    hullA.properties.related_to.push(`Area Component ${hullB.properties.id}`);
+                } else if (turf.booleanIntersects(hullA, hullB)) {
+                    // Only mark as intersecting if it hasn't already been marked as fully contained by a larger hull
+                    if (hullA.properties.relationship !== "Fully Contained") {
+                        hullA.properties.relationship = "Intersects";
+                    }
+                    hullA.properties.related_to.push(`Area Component ${hullB.properties.id}`);
                 }
             }
         }
     }
 
-    // 4. Collect Point Aggregates via Compressed Groups
-    console.log(`🧩 Aggregating structural clusters...`);
-    const groupMap = new Map();
-    for (let i = 0; i < N; i++) {
-        const root = find(i);
-        if (!groupMap.has(root)) {
-            groupMap.set(root, []);
+    // 7. Final Naming and Formatting
+    const finalFeatures = tempHulls.map(hull => {
+        const props = hull.properties;
+        let relationshipContext = "";
+
+        if (props.relationship !== "Independent") {
+            relationshipContext = ` [${props.relationship} inside ${props.related_to.join(', ')}]`;
         }
-        groupMap.get(root).push(...items[i].rawPoints);
-    }
 
-    // 5. Generate Final Hulls
-    console.log(`📐 Constructing final hulls for ${groupMap.size} system(s)...`);
-    let idx = 1;
-    const hullFeatures = [];
+        props.name = `Area Component ${props.id} (${props.area_sq_mi} sq mi) - Total Track: ${props.total_track_mi} mi${relationshipContext}`;
 
-    for (const [rootId, points] of groupMap.entries()) {
-        if (points.length < 3) continue;
+        // Leaflet / KML Styles
+        props.stroke = "#FFFF00";
+        props.color = "#FFFF00";
+        props.fillColor = "#FFFF00";
+        props.style = { color: "#FFFF00", fillColor: "#FFFF00" };
+        props["fill-opacity"] = 0.4;
+        props.weight = 3;
+        props.fill = "#FFFF00";
 
-        const ptCollection = turf.featureCollection(points.map(p => turf.point(p)));
-        const hull = turf.convex(ptCollection);
+        // Clean runtime properties before exporting
+        delete hull.bbox;
 
-        if (hull) {
-            const areaSqMiles = (turf.area(hull) * 0.000000386102).toFixed(2);
-
-            hull.properties = {
-                name: `Area Component ${idx++} (${areaSqMiles} sq mi)`,
-                stroke: "#FFFF00",
-                color: "#FFFF00",
-                fillColor: "#FFFF00",
-                "fill-opacity": 0.4,
-                weight: 3,
-                fill: "#FFFF00",
-                area_sq_mi: parseFloat(areaSqMiles)
-            };
-            hullFeatures.push(hull);
-        }
-    }
+        return hull;
+    });
 
     console.timeEnd("⏱️ Total Execution Time");
-    console.log(`✨ Success! Output contains ${hullFeatures.length} clean outlines.\n`);
+    console.log(`✨ Success! Output contains ${finalFeatures.length} structured yellow hulls.\n`);
 
-    const finalFC = turf.featureCollection(hullFeatures);
+    const finalFC = turf.featureCollection(finalFeatures);
     return {
         geoJSON: finalFC,
         kml: tokml(finalFC, { name: 'name' })
