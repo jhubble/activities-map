@@ -93,7 +93,7 @@ export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simpl
             const itemB = items[j];
             const bboxB = itemB.bbox;
 
-            const overlapsBBox = !(bboxB[0] > bboxA[2] || bboxB[2] < bboxA[0] || 
+            const overlapsBBox = !(bboxB[0] > bboxA[2] || bboxB[2] < bboxA[0] ||
                                    bboxB[1] > bboxA[3] || bboxB[3] < bboxA[1]);
 
             if (overlapsBBox && turf.booleanIntersects(itemA.collisionPoly, itemB.collisionPoly)) {
@@ -129,17 +129,17 @@ export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simpl
 
         if (hull) {
             const areaSqMiles = turf.area(hull) * 0.000000386102;
-            
+
             hull.properties = {
                 id: idx++,
                 area_sq_mi: parseFloat(areaSqMiles.toFixed(2)),
                 total_track_mi: parseFloat(data.totalTrackMiles.toFixed(2)),
                 track_count: data.trackCount,
-                relationship: "Independent", 
+                relationship: "Independent",
                 related_to: []
             };
-            
-            hull.bbox = turf.bbox(hull); 
+
+            hull.bbox = turf.bbox(hull);
             tempHulls.push(hull);
         }
     }
@@ -158,7 +158,7 @@ export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simpl
             // Evaluate if Hull B is strictly larger in area than Hull A
             if (hullB.properties.area_sq_mi <= hullA.properties.area_sq_mi) continue;
 
-            const overlaps = !(hullB.bbox[0] > hullA.bbox[2] || hullB.bbox[2] < hullA.bbox[0] || 
+            const overlaps = !(hullB.bbox[0] > hullA.bbox[2] || hullB.bbox[2] < hullA.bbox[0] ||
                                hullB.bbox[1] > hullA.bbox[3] || hullB.bbox[3] < hullA.bbox[1]);
 
             if (overlaps) {
@@ -184,13 +184,13 @@ export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simpl
     const finalFeatures = tempHulls.map(hull => {
         const props = hull.properties;
         let relationshipContext = "";
-        
+
         if (props.relationship !== "Independent") {
             relationshipContext = ` [${props.relationship} inside ${props.related_to.join(', ')}]`;
         }
 
         props.name = `Area Component ${props.id} (${props.area_sq_mi} sq mi) - Tracks: ${props.track_count}, Distance: ${props.total_track_mi} mi${relationshipContext}`;
-        
+
         // DIFFERENTIATED TREATMENT FOR NESTED/INTERSECTING HULLS
         if (props.relationship !== "Independent") {
             // Treatment for smaller sub-hulls: Thick dashed green outline with high opacity
@@ -212,13 +212,13 @@ export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simpl
             props.fill = "#FFFF00";
         }
 
-        delete hull.bbox; 
+        delete hull.bbox;
         return hull;
     });
 
     console.timeEnd("⏱️ Total Execution Time");
     console.log(`✨ Success! Output contains ${finalFeatures.length} structured hulls.`);
-    
+
     // Print the requested intersection/containment relationship log to the console
     if (relationshipLog.length > 0) {
         console.log(`\n📋 Cross-Hull Relationship Inventory:`);

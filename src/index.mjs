@@ -256,6 +256,15 @@ const getMapHtml = ({kml = '', lat, long, tiles = 'osm', geoJson = '' } = {}) =>
 
 							// Attach the event to your GeoJSON data
 							const geoJsonLayer = L.geoJson(geojsonJSON, {
+								style: function (feature) {
+									return {
+									    color: feature.properties.color,
+									    fillColor: feature.properties.fillColor,
+									    fillOpacity: feature.properties['fill-opacity'],
+									    weight: feature.properties.weight,
+									    dashArray: feature.properties.dashArray // Binds the dashed border option dynamically
+									};
+								    },
 							    onEachFeature: function (feature, layer) {
 							        if (feature.properties && feature.properties.name) {
 									layer.bindPopup(feature.properties.name);
