@@ -1,7 +1,7 @@
 import pkg from 'log4js';
 const { configure, getLogger } = pkg;
 
-const LOG_LEVEL = 'debug';
+const LOG_LEVEL = 'info';
 
 // Configuration Block
 configure({

@@ -34,3 +34,10 @@
     font-weight: bold;
     color: #009879;
 }
+
+.styled-table tbody tr.badgps {
+	background-color: #ff0000;
+}
+.styled-table tbody tr.badgps td {
+	background-color: #ff0000;
+}

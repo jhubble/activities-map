@@ -17,6 +17,14 @@ const __dirname = packageDirectorySync();
 
 logger.trace("dirname:",__dirname);
 
+function metersToMiles(meters) {
+  const miles = meters / 1609.344;
+  return Math.floor(miles * 100) / 100;
+}
+
+console.log(metersToMiles(5000)); // Output: 3.1
+
+
 const OPTIONS = {
 	type: Object.keys(TYPES),
 	checkForNewer: [true, false],
@@ -405,15 +413,31 @@ app.get('/stats', async (request, response) => {
 	const dayBucketsMoving = {};
 	if (result) {
 		const {data,opts,lat,long} = result;
-		const {activities} = data;
+		const {activities,activityProcessCounts} = data;
 		let elapsed = 0;
 		let moving = 0;
 		let earliest = null;
 		let latest = null;
+		let tracksHtml = `<table class="styled-table"><thead><tr><td>date</td><td>moving time</td><td>elapsed time</td><td>distance</td><td>elevation</td><td>track name</td></tr></thead><tbody>`;
+		const trackArray = [];
+		const badGPS = [];
 		activities.forEach(track => {
 			elapsed += track.elapsed_time;
 			moving += track.moving_time;
 			const startDate = Date.parse(track.start_date);
+			const trackName = `<a target="_blank" href="https://www.strava.com/activities/${track.id}">${track.name}</a>`;
+			let goodGPS = true;
+			if ((!track.start_latlng || track.start_latlng.length === 0) 
+				&& (!track.upload_id)
+			)
+				{
+				goodGPS = false;
+			}
+			trackArray.push(`<tr class="${goodGPS ? 'goodgps' : 'badgps'}"><td>${track.start_date_local}</td><td>${moving}</td><td>${elapsed}</td><td>${metersToMiles(track.distance)}</td><td>${Math.trunc(track.total_elevation_gain * 3.28084)}</td><td>${trackName}</td></tr>`);
+
+			if (!goodGPS) {
+				badGPS.push(trackName);
+			}
 			const bucket = new Date(track.start_date).toLocaleString('default',{month: 'short', year: 'numeric'});
 			const dayBucket = new Date(track.start_date).toLocaleString('default',{day: 'numeric', month: 'short', year: 'numeric'});
 			buckets[bucket] = buckets.hasOwnProperty(bucket) ? buckets[bucket] : { elapsed: 0, moving : 0 };
@@ -445,6 +469,8 @@ app.get('/stats', async (request, response) => {
 			}
 
 		});
+		tracksHtml += trackArray.reverse().join('\n');
+		tracksHtml += '</tbody></table>';
 		logger.trace("DATA",data);
 		logger.trace("OPTS",opts);
 		const days = (latest-earliest)/1000/60/60/24;
@@ -481,6 +507,14 @@ app.get('/stats', async (request, response) => {
 			})
 			.join('\n');
 		html += `</tbody></table>`;
+
+		html += '<h2>Activity Filter Counts</h2>'
+		html += '<table class="styled-table"><thead><tr><td>filter</td><td>count</td></tr></thead><tbody>';
+		Object.keys(activityProcessCounts).forEach(label => {
+			html +=`<tr><td>${label}</td><td>${activityProcessCounts[label]}</td></tr>`;
+		});
+		html += '</tbody></table>';
+
 		html += `\n<h2>Monthly stats (hours elapsed time)</h2>`;
 		html += `\n<table class="styled-table"><thead><tr><th>Month</th><th>Total</th><th>Daily Average*</th></tr></thead><tbody>`;
 		html += Object.keys(buckets)
@@ -519,6 +553,13 @@ app.get('/stats', async (request, response) => {
 			})
 			.join('\n');
 		html += `</tbody></table>`;
+
+
+		html += `<h2>All tracks</h2>`+tracksHtml;
+
+		html += `<h2>Tracks with missing GPS (${badGPS.length})</h2>`;
+		html += badGPS.join('<br />\n');
+
 		html += `</body></html>`;
 		response.send(html);
 	}

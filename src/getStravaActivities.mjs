@@ -94,6 +94,7 @@ const compareTrackMetaData = (oldTrack, newTrack) => {
 	});
 }
 export const getStuff = async ({ type = '', checkForNewer = false, location = {}, includePrivate=false, fromStamp, toStamp, token, tolerance, refresh = false } = {}) => {
+	let noDataTracks = 0;
 	logger.debug(`getStuff: type: ${type}, checkForNewer: ${checkForNewer}, location: ${location}, includePrivate: ${includePrivate}, fromStamp: ${fromStamp}, toStamp: ${toStamp}, token: ${token}, tolerance: ${tolerance}, refresh: ${refresh}`);
 	checkAPIInterval();
 	logger.info("TOLERANCE",tolerance);
@@ -167,6 +168,7 @@ export const getStuff = async ({ type = '', checkForNewer = false, location = {}
 					if (compareTrackMetaData(oldActivity, activity)) {
 						logger.info("Changes, so updating metadata and redownloading");
 						payload[oldActivityIndex] = activity;
+						// Just update metadata? And throw away track redownload? or don't do it?
 						await processActivity(activity,token,true,tolerance);
 					}
 				}
@@ -175,6 +177,11 @@ export const getStuff = async ({ type = '', checkForNewer = false, location = {}
 					payload.push(activity);
 					try {
 						fullActivity = await processActivity(activity,token,true,tolerance);
+						if (fullActivity === 'NO DATA') {
+							noDataTracks++;
+							logger.trace(`tracks with no data:`,noDataTracks);
+							fullActivity = null;
+						}
 					}
 					catch (e) {
 						logger.error(`Error with process activity for ${id}`,e);
@@ -220,10 +227,10 @@ export const getStuff = async ({ type = '', checkForNewer = false, location = {}
 			fs.writeFileSync(ACTIVITY_LIST_CACHE_FILE,JSON.stringify(payload,null,1));
 		}
 		logger.info("Number of activities:",payload.length);
-		const {trackData,activities} = await processActivities({token:token, payload:payload, type:type, location:location, includePrivate:includePrivate, fromStamp: fromStamp,toStamp:toStamp, tolerance:tolerance});
+		const {trackData,activities,activityProcessCounts} = await processActivities({token:token, payload:payload, type:type, location:location, includePrivate:includePrivate, fromStamp: fromStamp,toStamp:toStamp, tolerance:tolerance});
 		// return raw track data and kmlTrack
 		const kmlTrack = printKml.head("tracks")+trackData+printKml.tail(config.default_latitude,config.default_longitude);
-		return {activities, kmlTrack}
+		return {activities, kmlTrack, activityProcessCounts}
 	}
 	catch (e) {
 		logger.error("error",e)
@@ -236,8 +243,11 @@ const processActivities = async ({token, payload, type, location={}, includePriv
 	let error = 0;
 	let kmlTracks = '';
 	let desiredActivities = payload;
+	let noDataTracks = 0;
 	const searchType = TYPES[type];
-	logger.info(`Initial activities: ${payload.length}`);
+	const activityProcessCounts = {};
+	activityProcessCounts.totalActivities = payload.length
+	logger.info(`Initial activities: ${activityProcessCounts.totalActivities}`);
 
 	// filter the activities
 	if (searchType) {
@@ -245,12 +255,14 @@ const processActivities = async ({token, payload, type, location={}, includePriv
 			return (searchType.indexOf(activity.type) !== -1);
 		});
 		logger.info(`Desired by type: ${desiredActivities.length}`);
+		activityProcessCounts.byType = desiredActivities.length;
 	}
 	if (!includePrivate || includePrivate === 'false') {
 		desiredActivities = desiredActivities.filter(activity => {
 			return (!activity.private);
 		});
 		logger.info(`Desired after excluding private: ${desiredActivities.length}`);
+		activityProcessCounts.nonPrivate = desiredActivities.length;
 	}
 	if (location.min) {
 		desiredActivities = desiredActivities.filter(activity => {
@@ -258,6 +270,7 @@ const processActivities = async ({token, payload, type, location={}, includePriv
 				(activity.start_latlng[1] > location.min[1]))
 		})
 		logger.info(`Desired by min latlng: ${desiredActivities.length}`);
+		activityProcessCounts.minlatlng = desiredActivities.length;
 	}
 	if (location.max) {
 		desiredActivities = desiredActivities.filter(activity => {
@@ -265,18 +278,21 @@ const processActivities = async ({token, payload, type, location={}, includePriv
 				(activity.start_latlng[1] < location.max[1]))
 		})
 		logger.info(`Desired by max latlng: ${desiredActivities.length}`);
+		activityProcessCounts.maxlatlng = desiredActivities.length;
 	}
 	if (fromStamp) {
 		desiredActivities = desiredActivities.filter(activity => {
 			return ((new Date(activity.start_date)/1000) >= fromStamp)
 		})
 		logger.info(`Desired by after fromStamp: ${desiredActivities.length}`);
+		activityProcessCounts.afterStartTime = desiredActivities.length;
 	}
 	if (toStamp) {
 		desiredActivities = desiredActivities.filter(activity => {
 			return ((new Date(activity.start_date)/1000) <= toStamp)
 		})
 		logger.info(`Desired by after toStamp: ${desiredActivities.length}`);
+		activityProcessCounts.afterEndTime = desiredActivities.length;
 	}
 
 	// Get the track listing for each activity
@@ -285,8 +301,14 @@ const processActivities = async ({token, payload, type, location={}, includePriv
 		if (!error) {
 			try {
 				logger.trace("Processing activity:",activity);
-				const trackData = await processActivity(activity,token,false,tolerance);
-				kmlTracks += trackData;
+				let trackData = await processActivity(activity,token,false,tolerance);
+				if (trackData === 'NO DATA') {
+					noDataTracks++;
+					trackData = null;
+				}
+				else {
+					kmlTracks += trackData;
+				}
 			}
 			catch (e) {
 				++skipped;
@@ -305,7 +327,9 @@ const processActivities = async ({token, payload, type, location={}, includePriv
 	}))
 	console.info(`Skipped tracks: ${skipped}`);
 	console.info(`API Calls: ${called}`);
-	return {trackData:kmlTracks,activities:desiredActivities};
+	activityProcessCounts.skipped = skipped;
+	activityProcessCounts.noDataTracks = noDataTracks;
+	return {trackData:kmlTracks,activities:desiredActivities,activityProcessCounts};
 }
 
 export const getCacheFileFromActivity = (activity) => {
@@ -344,9 +368,9 @@ const processActivity = async (activity, token, force=false, tolerance=TOLERANCE
 			++skipped;
 			logger.warn(`Not downloading ${id} because ${called} exceeds ${MAX_TRACKS}, skipped: ${skipped}`);
 		}
-		else if (!Object.hasOwn(activity,'start_latlng') || !activity.start_latlng.length) {
+		else if (!activity.upload_id && (!Object.hasOwn(activity,'start_latlng') || !activity.start_latlng.length)) {
 			++skipped
-			logger.warn(`Not downloading ${id} because no start lat_lng (skipped: ${skipped})`);
+			logger.warn(`Not downloading ${id} ${activity?.name} ${activity?.start_date_local} because no start lat_lng (skipped: ${skipped})`);
 		}
 		else {
 			++called;
@@ -363,7 +387,7 @@ const processActivity = async (activity, token, force=false, tolerance=TOLERANCE
 		const latlngList = stream.find(list => list.type === 'latlng');
 		if (!latlngList) {
 			logger.warn(`no lat lng for activity: ${activity.id}: ${activity.name}`);
-			return ;
+			return "NO DATA";
 		}
 
 		const coordinates = tolerance ? simplifyTrack(latlngList.data, tolerance) :

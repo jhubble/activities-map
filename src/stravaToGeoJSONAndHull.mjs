@@ -9,8 +9,8 @@ import * as turf from '@turf/turf';
 import tokml from 'tokml';
 
 /**
- * Advanced track analyzer with track counts, mileage aggregation,
- * and area-sorted layer stacking for optimal Leaflet rendering.
+ * Advanced track analyzer with visual style differentiation for nested/intersecting components
+ * and automated relational tracking output logs.
  */
 export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simplifyTolerance = 0.0003) {
     console.log(`\n🚀 Processing ${fileList.length} files...`);
@@ -113,7 +113,7 @@ export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simpl
         const data = groupMap.get(root);
         data.points.push(...items[i].rawPoints);
         data.totalTrackMiles += items[i].trackMiles;
-        data.trackCount += 1; // Increment track count for this group
+        data.trackCount += 1;
     }
 
     // 5. Generate Initial Hulls
@@ -134,7 +134,7 @@ export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simpl
                 id: idx++,
                 area_sq_mi: parseFloat(areaSqMiles.toFixed(2)),
                 total_track_mi: parseFloat(data.totalTrackMiles.toFixed(2)),
-                track_count: data.trackCount, // Save track count to properties
+                track_count: data.trackCount,
                 relationship: "Independent", 
                 related_to: []
             };
@@ -146,6 +146,8 @@ export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simpl
 
     // 6. Cross-Hull Relationship Identification
     console.log(`📡 Analyzing relationships between hulls...`);
+    let relationshipLog = [];
+
     for (let i = 0; i < tempHulls.length; i++) {
         for (let j = 0; j < tempHulls.length; j++) {
             if (i === j) continue;
@@ -153,7 +155,7 @@ export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simpl
             const hullA = tempHulls[i];
             const hullB = tempHulls[j];
 
-            // Only evaluate if Hull B is strictly larger in area than Hull A
+            // Evaluate if Hull B is strictly larger in area than Hull A
             if (hullB.properties.area_sq_mi <= hullA.properties.area_sq_mi) continue;
 
             const overlaps = !(hullB.bbox[0] > hullA.bbox[2] || hullB.bbox[2] < hullA.bbox[0] || 
@@ -163,21 +165,22 @@ export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simpl
                 if (turf.booleanContains(hullB, hullA)) {
                     hullA.properties.relationship = "Fully Contained";
                     hullA.properties.related_to.push(`Area Component ${hullB.properties.id}`);
+                    relationshipLog.push(`  🔹 Area Component ${hullA.properties.id} is fully contained within Area Component ${hullB.properties.id}`);
                 } else if (turf.booleanIntersects(hullA, hullB)) {
                     if (hullA.properties.relationship !== "Fully Contained") {
                         hullA.properties.relationship = "Intersects";
                     }
                     hullA.properties.related_to.push(`Area Component ${hullB.properties.id}`);
+                    relationshipLog.push(`  🔸 Area Component ${hullA.properties.id} intersects with Area Component ${hullB.properties.id}`);
                 }
             }
         }
     }
 
-    // 7. Sort Hulls by Area (Descending) for Layer Stacking
-    // This places large polygons first in the array so small ones render on top.
+    // 7. Sort Hulls by Area (Descending) for Layer Stacking in Leaflet
     tempHulls.sort((a, b) => b.properties.area_sq_mi - a.properties.area_sq_mi);
 
-    // 8. Final Naming and Formatting
+    // 8. Final Naming and Specific Visual Style Formats
     const finalFeatures = tempHulls.map(hull => {
         const props = hull.properties;
         let relationshipContext = "";
@@ -186,25 +189,44 @@ export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simpl
             relationshipContext = ` [${props.relationship} inside ${props.related_to.join(', ')}]`;
         }
 
-        // Updated naming convention to include track counts
-        props.name = `Area Component ${props.id} (${props.area_sq_mi} sq mi) - Tracks: ${props.track_count}, Total Distance: ${props.total_track_mi} mi${relationshipContext}`;
+        props.name = `Area Component ${props.id} (${props.area_sq_mi} sq mi) - Tracks: ${props.track_count}, Distance: ${props.total_track_mi} mi${relationshipContext}`;
         
-        // Leaflet / KML Styles
-        props.stroke = "#FFFF00";
-        props.color = "#FFFF00";
-        props.fillColor = "#FFFF00";
-        props.style = { color: "#FFFF00", fillColor: "#FFFF00" };
-        props["fill-opacity"] = 0.4;
-        props.weight = 3;
-        props.fill = "#FFFF00";
+        // DIFFERENTIATED TREATMENT FOR NESTED/INTERSECTING HULLS
+        if (props.relationship !== "Independent") {
+            // Treatment for smaller sub-hulls: Thick dashed green outline with high opacity
+            props.stroke = "#00FF00";         // Green border
+            props.color = "#00FF00";          // Leaflet mapping property
+            props.fillColor = "#00FF00";      // Leaflet interior fill color
+            props["fill-opacity"] = 0.25;     // Lighter fill density so underlying tracks show
+            props.weight = 4;                 // Thicker stroke weight
+            props.dashArray = "5, 10";        // Dashed border styling for Leaflet
+            props.fill = "#00FF00";           // KML Property
+        } else {
+            // Treatment for independent/large parent hulls: Solid Yellow
+            props.stroke = "#FFFF00";
+            props.color = "#FFFF00";
+            props.fillColor = "#FFFF00";
+            props["fill-opacity"] = 0.4;
+            props.weight = 2;
+            props.dashArray = null;           // Solid border line
+            props.fill = "#FFFF00";
+        }
 
         delete hull.bbox; 
-
         return hull;
     });
 
     console.timeEnd("⏱️ Total Execution Time");
-    console.log(`✨ Success! Output contains ${finalFeatures.length} structured yellow hulls.\n`);
+    console.log(`✨ Success! Output contains ${finalFeatures.length} structured hulls.`);
+    
+    // Print the requested intersection/containment relationship log to the console
+    if (relationshipLog.length > 0) {
+        console.log(`\n📋 Cross-Hull Relationship Inventory:`);
+        console.log(relationshipLog.join('\n'));
+        console.log("");
+    } else {
+        console.log(`\n📋 Cross-Hull Relationship Inventory: No overlapping components detected.\n`);
+    }
 
     const finalFC = turf.featureCollection(finalFeatures);
     return {
