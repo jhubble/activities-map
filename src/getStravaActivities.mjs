@@ -93,7 +93,7 @@ const compareTrackMetaData = (oldTrack, newTrack) => {
 		}
 	});
 }
-export const getStuff = async ({ type = '', checkForNewer = false, location = {}, includePrivate=false, fromStamp, toStamp, token, tolerance, refresh = false } = {}) => {
+export const getStuff = async ({ type = '', checkForNewer = false, location = {}, includePrivate=false, fromStamp, toStamp, token, tolerance, refresh = false, dedup = false } = {}) => {
 	let noDataTracks = 0;
 	logger.debug(`getStuff: type: ${type}, checkForNewer: ${checkForNewer}, location: ${location}, includePrivate: ${includePrivate}, fromStamp: ${fromStamp}, toStamp: ${toStamp}, token: ${token}, tolerance: ${tolerance}, refresh: ${refresh}`);
 	checkAPIInterval();
@@ -227,7 +227,7 @@ export const getStuff = async ({ type = '', checkForNewer = false, location = {}
 			fs.writeFileSync(ACTIVITY_LIST_CACHE_FILE,JSON.stringify(payload,null,1));
 		}
 		logger.info("Number of activities:",payload.length);
-		const {trackData,activities,activityProcessCounts} = await processActivities({token:token, payload:payload, type:type, location:location, includePrivate:includePrivate, fromStamp: fromStamp,toStamp:toStamp, tolerance:tolerance});
+		const {trackData,activities,activityProcessCounts} = await processActivities({token:token, payload:payload, type:type, location:location, includePrivate:includePrivate, fromStamp: fromStamp,toStamp:toStamp, tolerance:tolerance, dedup:dedup});
 		// return raw track data and kmlTrack
 		const kmlTrack = printKml.head("tracks")+trackData+printKml.tail(config.default_latitude,config.default_longitude);
 		return {activities, kmlTrack, activityProcessCounts}
@@ -238,7 +238,7 @@ export const getStuff = async ({ type = '', checkForNewer = false, location = {}
 }
 
 
-const processActivities = async ({token, payload, type, location={}, includePrivate=false, fromStamp, toStamp, tolerance}) => {
+const processActivities = async ({token, payload, type, location={}, includePrivate=false, fromStamp, toStamp, tolerance, dedup}) => {
 	checkAPIInterval();
 	let error = 0;
 	let kmlTracks = '';
@@ -293,6 +293,10 @@ const processActivities = async ({token, payload, type, location={}, includePriv
 		})
 		logger.info(`Desired by after toStamp: ${desiredActivities.length}`);
 		activityProcessCounts.afterEndTime = desiredActivities.length;
+	}
+	if (dedup) {
+		desiredActivities = dedupStravaDuplicates(desiredActivities);
+		logger.info(`Activities after filtering out multiple athlete activities starting within 10 seconds of each other: ${desiredActivities.length}`);
 	}
 
 	// Get the track listing for each activity
@@ -589,4 +593,28 @@ const KEEP_COUNT = 10;
 
 	maintainRecentFiles(DIRECTORY_PATH, FILE_PREFIX, KEEP_COUNT);
 }
+
+
+
+// sometimes multiple versions of same activity are recorded by different means. Only take the first one
+const dedupStravaDuplicates = (arr) => {
+  // 1. Sort by date just in case they aren't ordered
+  const sorted = [...arr].sort((a, b) => new Date(a.start_date) - new Date(b.start_date));
+
+  let lastKeptTime = null;
+
+  // 2. Filter based on the 10-second threshold
+  return sorted.filter((item) => {
+    const currentTime = new Date(item.start_date).getTime();
+
+    // Condition: athlete_count > 1 AND it's within 10 seconds (10,000 ms) of the last kept item
+    if (item.athlete_count > 1 && lastKeptTime !== null && (currentTime - lastKeptTime) <= 10000) {
+      return false; // Skip/filter out this item
+    }
+
+    // Otherwise, we keep it and update our tracking timestamp
+    lastKeptTime = currentTime;
+    return true;
+  });
+};
 

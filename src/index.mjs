@@ -36,6 +36,7 @@ const OPTIONS = {
 	long_dist: { name:"Longitude distance", key:"location_distance_long", default:config.location_distance_long},
 	tiles: ['osm','none'],
 	showHulls: {values: [true, false], note: 'Will draw convex hulls around connected regions. Can take a long time with large data sets'},
+	dedup: {values: [true, false], note: 'Dedup duplicate activities. (If activities start at same time and Strava ideitifies multiple athletes)'},
 	tolerance: { default: config.tolerance, name:"Tolerance", key:"tolerance", note:"higher number=lower accuracy, smaller file. .5-1 is best, 10 is one city block, 0 is no smoothing"} 
 };
 
@@ -71,7 +72,7 @@ const processOption = (optionKey, optionValue) => {
 			html = outputLabel(optionKey, optionValue?.name);
 			html += `<input type="text" name="${optionValue?.['key'] || optionKey}" value="${optionValue?.default}"></input>`;
 		}
-		html += `<span>${optionValue?.note || ''}</span>`;
+		html += `<span> ${optionValue?.note || ''}</span>`;
 		return html;
 	}
 }
