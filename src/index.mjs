@@ -22,8 +22,6 @@ function metersToMiles(meters) {
   return Math.floor(miles * 100) / 100;
 }
 
-console.log(metersToMiles(5000)); // Output: 3.1
-
 
 const OPTIONS = {
 	type: Object.keys(TYPES),
@@ -449,22 +447,22 @@ app.get('/stats', async (request, response) => {
 			}
 			const bucket = new Date(track.start_date).toLocaleString('default',{month: 'short', year: 'numeric'});
 			const dayBucket = new Date(track.start_date).toLocaleString('default',{day: 'numeric', month: 'short', year: 'numeric'});
-			buckets[bucket] = buckets.hasOwnProperty(bucket) ? buckets[bucket] : { elapsed: 0, moving : 0 };
+			buckets[bucket] = buckets.hasOwnProperty(bucket) ? buckets[bucket] : { elapsed: 0, moving : 0, distance: 0, climb: 0 };
 			buckets[bucket].elapsed = (buckets[bucket]?.elapsed || 0) + track.elapsed_time;
 			buckets[bucket].moving = (buckets[bucket]?.moving || 0) + track.moving_time;
-			dayBuckets[dayBucket] = dayBuckets.hasOwnProperty(dayBucket) ? dayBuckets[dayBucket] : { elapsed: 0, movine: 0};
+			dayBuckets[dayBucket] = dayBuckets.hasOwnProperty(dayBucket) ? dayBuckets[dayBucket] : { elapsed: 0, moving: 0, distance: 0, climb: 0};
 			dayBuckets[dayBucket].elapsed = (dayBuckets[dayBucket]?.elapsed || 0) + track.elapsed_time;
 			dayBuckets[dayBucket].moving = (dayBuckets[dayBucket]?.moving || 0) + track.moving_time;
 
 			if (foot.indexOf(track.type) !== -1) {
 				buckets[bucket].steps = (buckets[bucket].moving || 0) + track.steps;
 				dayBuckets[dayBucket].steps = (dayBuckets[dayBucket].moving || 0) + track.steps;
-
-				buckets[bucket].distance = (buckets[bucket].distance || 0) + track.distance;
-				buckets[bucket].climb = (buckets[bucket].climb || 0) + track.elevation_gain;
-				dayBuckets[dayBucket].distance = (dayBuckets[dayBucket].distance || 0) + track.distance;
-				dayBuckets[dayBucket].climb = (dayBuckets[dayBucket].climb || 0) + track.elevation_gain;
 			}
+
+			buckets[bucket].distance = (buckets[bucket].distance || 0) + track.distance;
+			buckets[bucket].climb = (buckets[bucket].climb || 0) + track.total_elevation_gain;
+			dayBuckets[dayBucket].distance = (dayBuckets[dayBucket].distance || 0) + track.distance;
+			dayBuckets[dayBucket].climb = (dayBuckets[dayBucket].climb || 0) + track.total_elevation_gain;
 
 			types[track.type] = (types[track.type] || 0) + 1;
 			if (earliest === null || startDate < earliest) {
@@ -502,7 +500,7 @@ app.get('/stats', async (request, response) => {
 		html += `<tr><td>Moving Hours/Day </td><td> ${Number.parseFloat(moving_hours/days).toFixed(2)}</td></tr>`;
 		html += `<tr><td>Moving Hours</td><td>${Number.parseFloat(moving_hours).toFixed(2)}</td></tr>`;
 		html += `<tr><td>Activities/Day </td><td> ${Number.parseFloat(activities.length/days).toFixed(2)} activities</td></tr>`
-		html += `<tr><td>Hours/Activity </td><td> ${Number.parseFloat(hours/activities.length).toFixed(2)} activities</td></tr>`
+		html += `<tr><td>Hours/Activity </td><td> ${Number.parseFloat(hours/activities.length).toFixed(2)} hours</td></tr>`
 		html += `<tr><td>Yearly Estimate</td><td> ${Number.parseFloat((hours/days)*365).toFixed(2)} hours</td></tr>`;
 		html += `<tr><td>Yearly Moving Estimate</td><td> ${Number.parseFloat((moving_hours/days)*365).toFixed(2)} hours</td></tr>`;
 		html += `</tbody></table>`;
@@ -525,19 +523,22 @@ app.get('/stats', async (request, response) => {
 		html += '</tbody></table>';
 
 		html += `\n<h2>Monthly stats (hours elapsed time)</h2>`;
-		html += `\n<table class="styled-table"><thead><tr><th>Month</th><th>Total</th><th>Daily Average*</th></tr></thead><tbody>`;
+		html += `\n<table class="styled-table"><thead><tr><th>Month</th><th>Total</th><th>Daily Average*</th><th>distance (miles)</th><th>climb (feet)</th></tr></thead><tbody>`;
 		html += Object.keys(buckets)
 			.sort((a,b) => { return new Date(a) - new Date(b)})
 			.map(bucket => {
 				return `<tr><td>${bucket}</td>`
 					+`<td>${Number.parseFloat(buckets[bucket].elapsed/60/60).toFixed(2)}</td>`
-					+`<td>${Number.parseFloat((buckets[bucket].elapsed/60/60) / getDaysInMonth(bucket)).toFixed(2)}</td></tr>`;
+					+`<td>${Number.parseFloat((buckets[bucket].elapsed/60/60) / getDaysInMonth(bucket)).toFixed(2)}</td>`
+					+`<td>${Number.parseFloat(metersToMiles(buckets[bucket].distance)).toFixed(2)}</td>`
+					+`<td>${Number.parseFloat(buckets[bucket].climb*3.28084).toFixed(0)}</td>`
+					+`</tr>`;	
 			})
 			.join('\n');
 		html += `</tbody></table>`;
 		html += `* current month is average daily to date`;
 		html += `\n<h2>Daily stats</h2>`;
-	html += `\n<table class="styled-table"><thead><tr><th>Date</th><th>Daily elapsed</th><th>YTD Elapsed</th><th>Daily moving</th><th>YTD moving</th><th>non moving</th></tr></thead><tbody>`;
+	html += `\n<table class="styled-table"><thead><tr><th>Date</th><th>Daily elapsed</th><th>YTD Elapsed</th><th>Daily moving</th><th>YTD moving</th><th>non moving</th><th>distance</th><th>climb</th></tr></thead><tbody>`;
 		let year =0;
 		let yearCount = 0;
 		let yearCountMoving = 0;
@@ -558,6 +559,8 @@ app.get('/stats', async (request, response) => {
 					+`<td>${Number.parseFloat(dayBuckets[bucket].moving/60/60).toFixed(2)}</td>`
 					+`<td>${Number.parseFloat(yearCountMoving/60/60).toFixed(2)}</td>`
 					+`<td>${Number.parseFloat(dayBuckets[bucket].elapsed/60/60 - dayBuckets[bucket].moving/60/60).toFixed(2)}</td>`
+					+`<td>${Number.parseFloat(metersToMiles(dayBuckets[bucket].distance)).toFixed(2)}</td>`
+					+`<td>${Number.parseFloat((dayBuckets[bucket].climb)*3.28084).toFixed(0)}</td>`
 					+`</tr>`;
 			})
 			.join('\n');
