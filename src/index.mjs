@@ -278,7 +278,7 @@ const getMapHtml = ({kml = '', lat, long, tiles = 'osm', geoJson = '' } = {}) =>
 						});
 					}).catch(function (error) {
 						// There was an error
-						logger.error(error);
+						logger.error("UNKOWN ERROR2",error);
 					});
 				}
 			})
@@ -441,7 +441,7 @@ app.get('/stats', async (request, response) => {
 				{
 				goodGPS = false;
 			}
-			trackArray.push(`<tr class="${goodGPS ? 'goodgps' : 'badgps'}"><td>${track.start_date_local}</td><td>${moving}</td><td>${elapsed}</td><td>${metersToMiles(track.distance)}</td><td>${Math.trunc(track.total_elevation_gain * 3.28084)}</td><td>${trackName}</td></tr>`);
+			trackArray.push(`<tr class="${goodGPS ? 'goodgps' : 'badgps'}"><td>${track.start_date_local}</td><td>${Number.parseFloat(moving/60/60).toFixed(2)}</td><td>${Number.parseFloat(elapsed/60/60).toFixed(2)}</td><td>${metersToMiles(track.distance)}</td><td>${Math.trunc(track.total_elevation_gain * 3.28084)}</td><td>${trackName}</td></tr>`);
 
 			if (!goodGPS) {
 				badGPS.push(trackName);

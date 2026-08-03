@@ -296,7 +296,8 @@ const processActivities = async ({token, payload, type, location={}, includePriv
 	}
 	if (dedup) {
 		desiredActivities = dedupStravaDuplicates(desiredActivities);
-		logger.info(`Activities after filtering out multiple athlete activities starting within 10 seconds of each other: ${desiredActivities.length}`);
+		activityProcessCounts.afterDedup = desiredActivities.length;
+		logger.info(`Activities after filtering out multiple athlete activities starting within 2 minutes of each other: ${desiredActivities.length}`);
 	}
 
 	// Get the track listing for each activity
@@ -472,7 +473,7 @@ async function getCurrentAthleteId(accessToken) {
     const data = await response.json();
     // The response body contains the athlete details, including the 'id'
     const athleteId = data.id;
-    console.log('Current Athlete ID:', athleteId);
+    logger.trace('Current Athlete ID:', athleteId);
     return athleteId;
 
   } catch (error) {
@@ -524,12 +525,14 @@ export const callStravaAPI = async (token, endpoint,opts) => {
 
 	    return response.data;
 	  } catch (error) {
+	    logger.error("found error in axios");
 	    // Check if the error is due to an expired token (HTTP 401 Unauthorized)
 	    if (axios.isAxiosError(error) && error.response && error.response.status === 401) {
 	      logger.error("Access token expired or invalid. Refresh token required.");
 	      // TODO: trigger the token refresh logic here.
 	    }
-		  logger.error(error);
+		  logger.error("UNKNOWN ERROR",error);
+		  logger.error("throwing");
 	    throw error;
   }
 }
@@ -598,23 +601,56 @@ const KEEP_COUNT = 10;
 
 // sometimes multiple versions of same activity are recorded by different means. Only take the first one
 const dedupStravaDuplicates = (arr) => {
-  // 1. Sort by date just in case they aren't ordered
-  const sorted = [...arr].sort((a, b) => new Date(a.start_date) - new Date(b.start_date));
+  // 1. Filter out items that don't meet the minimum elapsed_time threshold first
+  const validItems = arr.filter(item => item.elapsed_time >= 200);
 
-  let lastKeptTime = null;
+  // 2. Sort by date chronologically
+  const sorted = [...validItems].sort((a, b) => new Date(a.start_date) - new Date(b.start_date));
 
-  // 2. Filter based on the 10-second threshold
-  return sorted.filter((item) => {
-    const currentTime = new Date(item.start_date).getTime();
+  const clusters = [];
+  let currentCluster = [];
 
-    // Condition: athlete_count > 1 AND it's within 10 seconds (10,000 ms) of the last kept item
-    if (item.athlete_count > 1 && lastKeptTime !== null && (currentTime - lastKeptTime) <= 10000) {
-      return false; // Skip/filter out this item
+  // 3. Group items into clusters based on the 2-minute (120,000 ms) window
+  sorted.forEach((item) => {
+    const itemTime = new Date(item.start_date).getTime();
+
+    if (currentCluster.length === 0) {
+      currentCluster.push(item);
+    } else {
+      const firstInClusterTime = new Date(currentCluster[0].start_date).getTime();
+
+      // Check if within 2 minutes (120,000 ms)
+      if (itemTime - firstInClusterTime <= 120000) {
+        currentCluster.push(item);
+      } else {
+        clusters.push(currentCluster);
+        currentCluster = [item];
+      }
+    }
+  });
+  if (currentCluster.length > 0) clusters.push(currentCluster);
+
+  // 4. Resolve each cluster
+  const result = [];
+
+  clusters.forEach((cluster) => {
+    // athlete_count <= 1 are exempt from deduplication
+    const exemptItems = cluster.filter(item => item.athlete_count <= 1);
+    const candidateItems = cluster.filter(item => item.athlete_count > 1);
+
+    if (candidateItems.length > 0) {
+      // Prioritize private: true
+      candidateItems.sort((a, b) => (b.private === true) - (a.private === true));
+      // Keep only the single best candidate from this 2-minute cluster
+      result.push(candidateItems[0]);
     }
 
-    // Otherwise, we keep it and update our tracking timestamp
-    lastKeptTime = currentTime;
-    return true;
+    // Include exempt items back into the final list
+    result.push(...exemptItems);
   });
+
+  // Final chronological sort
+  return result.sort((a, b) => new Date(a.start_date) - new Date(b.start_date));
 };
+
 
