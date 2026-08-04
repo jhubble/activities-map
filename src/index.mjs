@@ -445,7 +445,8 @@ app.get('/stats', async (request, response) => {
 				{
 				goodGPS = false;
 			}
-			trackArray.push(`<tr class="${goodGPS ? 'goodgps' : 'badgps'}"><td>${new Date(startDate).toLocaleString()}</td><td>${toHours(track.moving_time)}</td><td>${toHours(track.elapsed_time)}</td><td>${metersToMiles(track.distance)}</td><td>${Math.trunc(track.total_elevation_gain * 3.28084)}</td><td>${trackName}</td></tr>`);
+			const title = track.removed_count ? `title="${track.removed_count} duplicate similar tracks removed"` : '';
+			trackArray.push(`<tr class="${goodGPS ? 'goodgps' : 'badgps'} ${track.removed_count ? 'removed-items' : ''}" ${title} ><td>${new Date(startDate).toLocaleString()}</td><td>${toHours(track.moving_time)}</td><td>${toHours(track.elapsed_time)}</td><td>${metersToMiles(track.distance)}</td><td>${Math.trunc(track.total_elevation_gain * 3.28084)}</td><td>${trackName}</td></tr>`);
 
 			if (!goodGPS) {
 				badGPS.push(trackName);

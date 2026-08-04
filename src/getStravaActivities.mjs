@@ -603,8 +603,8 @@ const KEEP_COUNT = 10;
 
 // sometimes multiple versions of same activity are recorded by different means. Only take the first one
 const dedupStravaDuplicates = (arr) => {
-  // 1. Filter out items with elapsed_time < 200
-  const validItems = arr.filter(item => item.elapsed_time >= 200);
+  // 1. Filter out items with elapsed_time < 400
+  const validItems = arr.filter(item => item.elapsed_time >= 400);
 
   // 2. Sort chronologically
   const sorted = [...validItems].sort((a, b) => new Date(a.start_date) - new Date(b.start_date));
@@ -612,7 +612,7 @@ const dedupStravaDuplicates = (arr) => {
   const clusters = [];
   let currentCluster = [];
 
-  // 3. Cluster within 2-minute (120,000 ms) windows
+  // 3. Cluster within 5-minute (300,000 ms) windows
   sorted.forEach((item) => {
     const itemTime = new Date(item.start_date).getTime();
 
@@ -621,7 +621,7 @@ const dedupStravaDuplicates = (arr) => {
     } else {
       const firstInClusterTime = new Date(currentCluster[0].start_date).getTime();
 
-      if (itemTime - firstInClusterTime <= 120000) {
+      if (itemTime - firstInClusterTime <= 300000) {
         currentCluster.push(item);
       } else {
         clusters.push(currentCluster);
@@ -640,26 +640,35 @@ const dedupStravaDuplicates = (arr) => {
     const candidateItems = cluster.filter(item => item.athlete_count > 1);
 
     if (candidateItems.length > 0) {
-      // Prioritize keeping private: false (float false to top, true to bottom)
+      // Prioritize keeping private: false
       candidateItems.sort((a, b) => Number(a.private) - Number(b.private));
 
-      const keptItem = candidateItems[0];
+      const bestCandidate = candidateItems[0];
       const removedItems = candidateItems.slice(1);
+
+      // Add removed_count property to the kept object
+      const keptItem = {
+        ...bestCandidate,
+        removed_count: removedItems.length
+      };
 
       filteredList.push(keptItem);
 
-      // Log if any duplicates were actually removed
+      // Log if duplicates were removed
       if (removedItems.length > 0) {
         removalLogs.push({
           kept: {
             name: keptItem.name,
             start_date: keptItem.start_date,
-            private: keptItem.private
+            private: keptItem.private,
+            elapsed_time: keptItem.elapsed_time,
+            removed_count: keptItem.removed_count
           },
           removed: removedItems.map(item => ({
             name: item.name,
             start_date: item.start_date,
-            private: item.private
+            private: item.private,
+            elapsed_time: item.elapsed_time
           }))
         });
       }
@@ -668,11 +677,9 @@ const dedupStravaDuplicates = (arr) => {
     filteredList.push(...exemptItems);
   });
 
-  // Final chronological sort for the clean list
+  // Final chronological sort
   filteredList.sort((a, b) => new Date(a.start_date) - new Date(b.start_date));
 
   return { filteredList, removalLogs };
 };
-
-
 

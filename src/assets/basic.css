@@ -41,3 +41,9 @@
 .styled-table tbody tr.badgps td {
 	background-color: #ff0000;
 }
+.styled-table tbody tr.removed-items {
+	background-color: #f9f998;
+}
+.styled-table tbody tr.removed-items td {
+	background-color: #f9f998;
+}
