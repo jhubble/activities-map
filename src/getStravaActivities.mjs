@@ -295,7 +295,9 @@ const processActivities = async ({token, payload, type, location={}, includePriv
 		activityProcessCounts.afterEndTime = desiredActivities.length;
 	}
 	if (dedup) {
-		desiredActivities = dedupStravaDuplicates(desiredActivities);
+		const { filteredList, removalLogs }  = dedupStravaDuplicates(desiredActivities);
+		logger.info("Logs of removal",JSON.stringify(removalLogs,null,1));
+		desiredActivities = filteredList;
 		activityProcessCounts.afterDedup = desiredActivities.length;
 		logger.info(`Activities after filtering out multiple athlete activities starting within 2 minutes of each other: ${desiredActivities.length}`);
 	}
@@ -601,16 +603,16 @@ const KEEP_COUNT = 10;
 
 // sometimes multiple versions of same activity are recorded by different means. Only take the first one
 const dedupStravaDuplicates = (arr) => {
-  // 1. Filter out items that don't meet the minimum elapsed_time threshold first
+  // 1. Filter out items with elapsed_time < 200
   const validItems = arr.filter(item => item.elapsed_time >= 200);
 
-  // 2. Sort by date chronologically
+  // 2. Sort chronologically
   const sorted = [...validItems].sort((a, b) => new Date(a.start_date) - new Date(b.start_date));
 
   const clusters = [];
   let currentCluster = [];
 
-  // 3. Group items into clusters based on the 2-minute (120,000 ms) window
+  // 3. Cluster within 2-minute (120,000 ms) windows
   sorted.forEach((item) => {
     const itemTime = new Date(item.start_date).getTime();
 
@@ -619,7 +621,6 @@ const dedupStravaDuplicates = (arr) => {
     } else {
       const firstInClusterTime = new Date(currentCluster[0].start_date).getTime();
 
-      // Check if within 2 minutes (120,000 ms)
       if (itemTime - firstInClusterTime <= 120000) {
         currentCluster.push(item);
       } else {
@@ -630,27 +631,48 @@ const dedupStravaDuplicates = (arr) => {
   });
   if (currentCluster.length > 0) clusters.push(currentCluster);
 
-  // 4. Resolve each cluster
-  const result = [];
+  // 4. Resolve clusters & build the removal report
+  const filteredList = [];
+  const removalLogs = [];
 
   clusters.forEach((cluster) => {
-    // athlete_count <= 1 are exempt from deduplication
     const exemptItems = cluster.filter(item => item.athlete_count <= 1);
     const candidateItems = cluster.filter(item => item.athlete_count > 1);
 
     if (candidateItems.length > 0) {
-      // Prioritize private: true
-      candidateItems.sort((a, b) => (b.private === true) - (a.private === true));
-      // Keep only the single best candidate from this 2-minute cluster
-      result.push(candidateItems[0]);
+      // Prioritize keeping private: false (float false to top, true to bottom)
+      candidateItems.sort((a, b) => Number(a.private) - Number(b.private));
+
+      const keptItem = candidateItems[0];
+      const removedItems = candidateItems.slice(1);
+
+      filteredList.push(keptItem);
+
+      // Log if any duplicates were actually removed
+      if (removedItems.length > 0) {
+        removalLogs.push({
+          kept: {
+            name: keptItem.name,
+            start_date: keptItem.start_date,
+            private: keptItem.private
+          },
+          removed: removedItems.map(item => ({
+            name: item.name,
+            start_date: item.start_date,
+            private: item.private
+          }))
+        });
+      }
     }
 
-    // Include exempt items back into the final list
-    result.push(...exemptItems);
+    filteredList.push(...exemptItems);
   });
 
-  // Final chronological sort
-  return result.sort((a, b) => new Date(a.start_date) - new Date(b.start_date));
+  // Final chronological sort for the clean list
+  filteredList.sort((a, b) => new Date(a.start_date) - new Date(b.start_date));
+
+  return { filteredList, removalLogs };
 };
+
 
 

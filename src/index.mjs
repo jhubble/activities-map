@@ -22,6 +22,10 @@ function metersToMiles(meters) {
   return Math.floor(miles * 100) / 100;
 }
 
+const toHours = (seconds) => {
+	return (seconds/60/60).toFixed(2);
+}
+
 
 const OPTIONS = {
 	type: Object.keys(TYPES),
@@ -441,7 +445,7 @@ app.get('/stats', async (request, response) => {
 				{
 				goodGPS = false;
 			}
-			trackArray.push(`<tr class="${goodGPS ? 'goodgps' : 'badgps'}"><td>${track.start_date_local}</td><td>${Number.parseFloat(moving/60/60).toFixed(2)}</td><td>${Number.parseFloat(elapsed/60/60).toFixed(2)}</td><td>${metersToMiles(track.distance)}</td><td>${Math.trunc(track.total_elevation_gain * 3.28084)}</td><td>${trackName}</td></tr>`);
+			trackArray.push(`<tr class="${goodGPS ? 'goodgps' : 'badgps'}"><td>${new Date(startDate).toLocaleString()}</td><td>${toHours(track.moving_time)}</td><td>${toHours(track.elapsed_time)}</td><td>${metersToMiles(track.distance)}</td><td>${Math.trunc(track.total_elevation_gain * 3.28084)}</td><td>${trackName}</td></tr>`);
 
 			if (!goodGPS) {
 				badGPS.push(trackName);
