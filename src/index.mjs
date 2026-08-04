@@ -22,6 +22,10 @@ function metersToMiles(meters) {
   return Math.floor(miles * 100) / 100;
 }
 
+const toHours = (seconds) => {
+	return (seconds/60/60).toFixed(2);
+}
+
 
 const OPTIONS = {
 	type: Object.keys(TYPES),
@@ -36,6 +40,7 @@ const OPTIONS = {
 	long_dist: { name:"Longitude distance", key:"location_distance_long", default:config.location_distance_long},
 	tiles: ['osm','none'],
 	showHulls: {values: [true, false], note: 'Will draw convex hulls around connected regions. Can take a long time with large data sets'},
+	dedup: {values: [true, false], note: 'Dedup duplicate activities. (If activities start at same time and Strava ideitifies multiple athletes)'},
 	tolerance: { default: config.tolerance, name:"Tolerance", key:"tolerance", note:"higher number=lower accuracy, smaller file. .5-1 is best, 10 is one city block, 0 is no smoothing"} 
 };
 
@@ -71,7 +76,7 @@ const processOption = (optionKey, optionValue) => {
 			html = outputLabel(optionKey, optionValue?.name);
 			html += `<input type="text" name="${optionValue?.['key'] || optionKey}" value="${optionValue?.default}"></input>`;
 		}
-		html += `<span>${optionValue?.note || ''}</span>`;
+		html += `<span> ${optionValue?.note || ''}</span>`;
 		return html;
 	}
 }
@@ -277,7 +282,7 @@ const getMapHtml = ({kml = '', lat, long, tiles = 'osm', geoJson = '' } = {}) =>
 						});
 					}).catch(function (error) {
 						// There was an error
-						logger.error(error);
+						logger.error("UNKOWN ERROR2",error);
 					});
 				}
 			})
@@ -440,7 +445,8 @@ app.get('/stats', async (request, response) => {
 				{
 				goodGPS = false;
 			}
-			trackArray.push(`<tr class="${goodGPS ? 'goodgps' : 'badgps'}"><td>${track.start_date_local}</td><td>${moving}</td><td>${elapsed}</td><td>${metersToMiles(track.distance)}</td><td>${Math.trunc(track.total_elevation_gain * 3.28084)}</td><td>${trackName}</td></tr>`);
+			const title = track.removed_count ? `title="${track.removed_count} duplicate similar tracks removed"` : '';
+			trackArray.push(`<tr class="${goodGPS ? 'goodgps' : 'badgps'} ${track.removed_count ? 'removed-items' : ''}" ${title} ><td>${new Date(startDate).toLocaleString()}</td><td>${toHours(track.moving_time)}</td><td>${toHours(track.elapsed_time)}</td><td>${metersToMiles(track.distance)}</td><td>${Math.trunc(track.total_elevation_gain * 3.28084)}</td><td>${trackName}</td></tr>`);
 
 			if (!goodGPS) {
 				badGPS.push(trackName);

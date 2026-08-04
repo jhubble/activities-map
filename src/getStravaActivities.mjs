@@ -93,7 +93,7 @@ const compareTrackMetaData = (oldTrack, newTrack) => {
 		}
 	});
 }
-export const getStuff = async ({ type = '', checkForNewer = false, location = {}, includePrivate=false, fromStamp, toStamp, token, tolerance, refresh = false } = {}) => {
+export const getStuff = async ({ type = '', checkForNewer = false, location = {}, includePrivate=false, fromStamp, toStamp, token, tolerance, refresh = false, dedup = false } = {}) => {
 	let noDataTracks = 0;
 	logger.debug(`getStuff: type: ${type}, checkForNewer: ${checkForNewer}, location: ${location}, includePrivate: ${includePrivate}, fromStamp: ${fromStamp}, toStamp: ${toStamp}, token: ${token}, tolerance: ${tolerance}, refresh: ${refresh}`);
 	checkAPIInterval();
@@ -227,7 +227,7 @@ export const getStuff = async ({ type = '', checkForNewer = false, location = {}
 			fs.writeFileSync(ACTIVITY_LIST_CACHE_FILE,JSON.stringify(payload,null,1));
 		}
 		logger.info("Number of activities:",payload.length);
-		const {trackData,activities,activityProcessCounts} = await processActivities({token:token, payload:payload, type:type, location:location, includePrivate:includePrivate, fromStamp: fromStamp,toStamp:toStamp, tolerance:tolerance});
+		const {trackData,activities,activityProcessCounts} = await processActivities({token:token, payload:payload, type:type, location:location, includePrivate:includePrivate, fromStamp: fromStamp,toStamp:toStamp, tolerance:tolerance, dedup:dedup});
 		// return raw track data and kmlTrack
 		const kmlTrack = printKml.head("tracks")+trackData+printKml.tail(config.default_latitude,config.default_longitude);
 		return {activities, kmlTrack, activityProcessCounts}
@@ -238,7 +238,7 @@ export const getStuff = async ({ type = '', checkForNewer = false, location = {}
 }
 
 
-const processActivities = async ({token, payload, type, location={}, includePrivate=false, fromStamp, toStamp, tolerance}) => {
+const processActivities = async ({token, payload, type, location={}, includePrivate=false, fromStamp, toStamp, tolerance, dedup}) => {
 	checkAPIInterval();
 	let error = 0;
 	let kmlTracks = '';
@@ -293,6 +293,13 @@ const processActivities = async ({token, payload, type, location={}, includePriv
 		})
 		logger.info(`Desired by after toStamp: ${desiredActivities.length}`);
 		activityProcessCounts.afterEndTime = desiredActivities.length;
+	}
+	if (dedup) {
+		const { filteredList, removalLogs }  = dedupStravaDuplicates(desiredActivities);
+		logger.info("Logs of removal",JSON.stringify(removalLogs,null,1));
+		desiredActivities = filteredList;
+		activityProcessCounts.afterDedup = desiredActivities.length;
+		logger.info(`Activities after filtering out multiple athlete activities starting within 2 minutes of each other: ${desiredActivities.length}`);
 	}
 
 	// Get the track listing for each activity
@@ -468,7 +475,7 @@ async function getCurrentAthleteId(accessToken) {
     const data = await response.json();
     // The response body contains the athlete details, including the 'id'
     const athleteId = data.id;
-    console.log('Current Athlete ID:', athleteId);
+    logger.trace('Current Athlete ID:', athleteId);
     return athleteId;
 
   } catch (error) {
@@ -520,12 +527,14 @@ export const callStravaAPI = async (token, endpoint,opts) => {
 
 	    return response.data;
 	  } catch (error) {
+	    logger.error("found error in axios");
 	    // Check if the error is due to an expired token (HTTP 401 Unauthorized)
 	    if (axios.isAxiosError(error) && error.response && error.response.status === 401) {
 	      logger.error("Access token expired or invalid. Refresh token required.");
 	      // TODO: trigger the token refresh logic here.
 	    }
-		  logger.error(error);
+		  logger.error("UNKNOWN ERROR",error);
+		  logger.error("throwing");
 	    throw error;
   }
 }
@@ -589,4 +598,88 @@ const KEEP_COUNT = 10;
 
 	maintainRecentFiles(DIRECTORY_PATH, FILE_PREFIX, KEEP_COUNT);
 }
+
+
+
+// sometimes multiple versions of same activity are recorded by different means. Only take the first one
+const dedupStravaDuplicates = (arr) => {
+  // 1. Filter out items with elapsed_time < 400
+  const validItems = arr.filter(item => item.elapsed_time >= 400);
+
+  // 2. Sort chronologically
+  const sorted = [...validItems].sort((a, b) => new Date(a.start_date) - new Date(b.start_date));
+
+  const clusters = [];
+  let currentCluster = [];
+
+  // 3. Cluster within 5-minute (300,000 ms) windows
+  sorted.forEach((item) => {
+    const itemTime = new Date(item.start_date).getTime();
+
+    if (currentCluster.length === 0) {
+      currentCluster.push(item);
+    } else {
+      const firstInClusterTime = new Date(currentCluster[0].start_date).getTime();
+
+      if (itemTime - firstInClusterTime <= 300000) {
+        currentCluster.push(item);
+      } else {
+        clusters.push(currentCluster);
+        currentCluster = [item];
+      }
+    }
+  });
+  if (currentCluster.length > 0) clusters.push(currentCluster);
+
+  // 4. Resolve clusters & build the removal report
+  const filteredList = [];
+  const removalLogs = [];
+
+  clusters.forEach((cluster) => {
+    const exemptItems = cluster.filter(item => item.athlete_count <= 1);
+    const candidateItems = cluster.filter(item => item.athlete_count > 1);
+
+    if (candidateItems.length > 0) {
+      // Prioritize keeping private: false
+      candidateItems.sort((a, b) => Number(a.private) - Number(b.private));
+
+      const bestCandidate = candidateItems[0];
+      const removedItems = candidateItems.slice(1);
+
+      // Add removed_count property to the kept object
+      const keptItem = {
+        ...bestCandidate,
+        removed_count: removedItems.length
+      };
+
+      filteredList.push(keptItem);
+
+      // Log if duplicates were removed
+      if (removedItems.length > 0) {
+        removalLogs.push({
+          kept: {
+            name: keptItem.name,
+            start_date: keptItem.start_date,
+            private: keptItem.private,
+            elapsed_time: keptItem.elapsed_time,
+            removed_count: keptItem.removed_count
+          },
+          removed: removedItems.map(item => ({
+            name: item.name,
+            start_date: item.start_date,
+            private: item.private,
+            elapsed_time: item.elapsed_time
+          }))
+        });
+      }
+    }
+
+    filteredList.push(...exemptItems);
+  });
+
+  // Final chronological sort
+  filteredList.sort((a, b) => new Date(a.start_date) - new Date(b.start_date));
+
+  return { filteredList, removalLogs };
+};
 
