@@ -39,6 +39,16 @@ export interface StravaActivity {
   [key: string]: any;
 }
 
+export interface StravaStreamItem<T = any> {
+  type: 'latlng' | 'time' | 'distance' | 'altitude' | string;
+  data: T[];
+  series_type?: string;
+  original_size?: number;
+  resolution?: string;
+}
+
+export type StravaStream = StravaStreamItem[];
+
 export interface ActivityFilterCounts {
   totalActivities?: number;
   byType?: number;
@@ -50,7 +60,8 @@ export interface ActivityFilterCounts {
   afterDedup?: number;
   skipped?: number;
   noDataTracks?: number;
-  [key: string]: number | undefined;
+  rateLimitReached?: boolean;
+  [key: string]: number | boolean | undefined;
 }
 
 export interface GetStuffOptions {
@@ -66,6 +77,7 @@ export interface GetStuffOptions {
   fromStamp?: number | string;
   toStamp?: number | string;
   token?: string;
+  athleteID?: number | string;
   tolerance?: number | null;
   refresh?: boolean | string;
   dedup?: boolean | string;
@@ -83,4 +95,5 @@ export interface GetStuffResult {
   activities: StravaActivity[];
   kmlTrack: string;
   activityProcessCounts: ActivityFilterCounts;
+  rateLimitReached?: boolean;
 }

@@ -3,17 +3,21 @@ import type { Request, Response } from 'express';
 import { packageDirectorySync } from 'package-directory';
 import { logger } from './loggerSetup.js';
 import path from 'path';
-import { getStuff, outputFile, getAuthURL, getAuthToken, getCacheFileFromActivity, TYPES } from './getStravaActivities.js';
+import fs from 'fs';
+import { defaultStravaService, outputFile, getAuthURL, getAuthToken, TYPES } from './getStravaActivities.js';
 import { getGeoJsonFromFile } from './kmlToGeoJson.js';
 import { getSpatialAnalysis } from './stravaToGeoJSONAndHull.js';
 import config from './config.js';
 import type { StravaActivity, GetStuffOptions, GetStuffResult } from './types/index.js';
+import { escapeHtml } from './utils/html.js';
+import { renderHomePage, renderOptionsForm, renderMapHtml, renderStatsHtml } from './views/templates.js';
 
-logger.info("starting app");
+logger.info("starting activities-map application");
 const app = express();
 const port = config.run_on_port || 8080;
 const foot = config.activity_types.Foot || []; // Run, Walk, Hike
 const __dirname = packageDirectorySync() || process.cwd();
+const outDir = path.resolve(__dirname, 'out');
 
 logger.trace("dirname:", __dirname);
 
@@ -54,39 +58,33 @@ const OPTIONS: Record<string, OptionConfig> = {
 };
 
 const outputLabel = (optionKey: string, name?: string): string => {
-	return `<label>${name || optionKey}</label>:`;
+	return `<label>${escapeHtml(name || optionKey)}</label>:`;
 };
 
 const outputArrayValues = (optionKey: string, optionValue: any[], name?: string): string => {
 	let html = outputLabel(optionKey, name);
-	html += `<select name="${optionKey}">`;
-	html += optionValue.map(k => `<option value="${k}">${k}</option>`).join('');
+	html += `<select name="${escapeHtml(optionKey)}">`;
+	html += optionValue.map(k => `<option value="${escapeHtml(k)}">${escapeHtml(k)}</option>`).join('');
 	html += "</select>";
 	return html;
 };
 
 const processOption = (optionKey: string, optionValue: OptionConfig): string => {
-	// If it is an array, it is list of values, default to first
-	// name is key
 	if (Array.isArray(optionValue)) {
 		return outputArrayValues(optionKey, optionValue);
 	}
-	// If it is a string, it is an input field with value as default
 	if (typeof optionValue === 'string') {
-		const html = `<label>${optionKey}</label>: <input type="text" name="${optionKey}" value="${optionValue}"></input>`;
-		return html;
+		return `<label>${escapeHtml(optionKey)}</label>: <input type="text" name="${escapeHtml(optionKey)}" value="${escapeHtml(optionValue)}"></input>`;
 	}
-	// An object has explicit name, value and default (and maybe values for list)
 	if (typeof optionValue === 'object' && optionValue !== null) {
 		let html = '';
 		if (Array.isArray(optionValue.values)) {
 			html += outputArrayValues(optionKey, optionValue.values, optionValue.name);
-		}
-		else {
+		} else {
 			html = outputLabel(optionKey, optionValue.name);
-			html += `<input type="text" name="${optionValue.key || optionKey}" value="${optionValue.default}"></input>`;
+			html += `<input type="text" name="${escapeHtml(optionValue.key || optionKey)}" value="${escapeHtml(optionValue.default)}"></input>`;
 		}
-		html += `<span> ${optionValue.note || ''}</span>`;
+		html += `<span> ${escapeHtml(optionValue.note || '')}</span>`;
 		return html;
 	}
 	return '';
@@ -97,62 +95,21 @@ const processOptions = (options: Record<string, OptionConfig>): string => {
 	return html.join('<br>');
 };
 
-// default entry point - shows static page
+// default entry point - shows static home page
 app.get('/', (_request: Request, response: Response) => {
-	const auth_url = getAuthURL();
-	response.send(`
-<html>
-        <head>
-                <title>
-                        Activities map
-                </title>
-        </head>
-        <body>
-                <p>
-		<a href="${auth_url}">Auth with Strava (must do before calling any data) </a>
-                </p>
-                <p>
-                <a href="/code">Go directly to options (to use cached data)</a>
-                </p>
-		<p>
-		<a href="/map">View map</a>
-		</p>
-        </body>
-</html>
-	`);
+	const authUrl = getAuthURL();
+	response.send(renderHomePage(authUrl));
 });
 
-// /code is where we paste the code after authentication with strava
-// If we get here without authenticating, the "checkForNewer" default flag is flipped
-
 const getOptionForm = (token?: string, athleteid?: number | string, refresh: boolean = false): string => {
-	const auth_url = getAuthURL("coderefresh");
+	const authUrl = getAuthURL("coderefresh");
 	logger.info("Token from options form:", token);
 	const options: Record<string, OptionConfig> = JSON.parse(JSON.stringify(OPTIONS));
-	// Default to not use strava api if we don't have token
 	if (!token) {
 		options.checkForNewer = [false, true];
 	}
 	const htmlOptions = processOptions(options);
-	let output = `<form id="myForm" action="/process" method="get">`;
-	output += htmlOptions;
-	output += `<br>Stava Athlete ID:<input type="text" name="athleteid" value="${athleteid || ''}"></input>`;
-	output += `<br>Strava token:<input type="text" name="token" value="${token || ''}"></input>`;
-	output += `<a id="refresh" onclick="saveFormData()" href="${auth_url}">Auth with Strava</a>`;
-	output += `<br>`;
-	output += `<p>fromStamp and toStamp or minutes from epoch. (e.g. Date.now()/1000)</p>`;
-	output += `<p>Distances are degrees from center (plus or minus)</p>`;
-	output += `<p>Check For Newer will call strava for more, otherwise, cache will be used</p>`;
-	output += `<input type="submit" value="Generate Map">`;
-	output += `<input type="submit" formaction="/stats" value="Show Stats">`;
-	output += `</form>`;
-	output += `<p><strong>The first time run with "Check For Newer" it will download all track information. This can take a long time.</strong>. Later calls will just get items newer than available.</p>`; 
-
-	output += `<script src="/formClient.js"></script>`;
-	if (refresh) {
-		output += `<script>restoreFormData()</script>`;
-	}
-	return output;
+	return renderOptionsForm(htmlOptions, authUrl, token, athleteid, refresh);
 };
 
 app.get('/formClient.js', (_req: Request, res: Response) => {
@@ -165,13 +122,11 @@ app.get('/code', (request: Request, response: Response) => {
 	logger.info("Calling /code with code", code);
 	if (!code) {
 		response.send(getOptionForm());
-	}
-	else {
+	} else {
 		getAuthToken(code).then(({ access_token, athleteID }) => {
 			logger.info("Got token", access_token, "athleteid", athleteID);
 			response.send(getOptionForm(access_token, athleteID ?? undefined));
-		})
-		.catch(() => {
+		}).catch(() => {
 			response.send(getOptionForm());
 		});
 	}
@@ -181,155 +136,58 @@ app.get('/coderefresh', (request: Request, response: Response) => {
 	const code = request.query?.code as string | undefined;
 	logger.info("Calling /coderefresh with code", code);
 	if (!code) {
-		logger.debug("No code, so direct to option form");
 		response.send(getOptionForm());
-	}
-	else {
-		logger.debug("code, so calling promise");
+	} else {
 		getAuthToken(code).then(({ access_token, athleteID }) => {
 			logger.info("Got token", access_token, "athleteid", athleteID);
 			response.send(getOptionForm(access_token, athleteID ?? undefined, true));
-		})
-		.catch((e) => {
+		}).catch((e) => {
 			logger.error("error with token", e);
 			response.send(getOptionForm());
 		});
 	}
 });
 
-interface MapHtmlParams {
-	kml?: string;
-	lat?: string | number;
-	long?: string | number;
-	tiles?: string;
-	geoJson?: string | null;
-}
-
-const getMapHtml = ({ kml = '', lat, long, tiles = 'osm', geoJson = '' }: MapHtmlParams = {}): string => {
-	const osmTiles = `
-                        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-                        }).addTo(map);
-	`;
-
-	const leaflet = `
-               <link rel="stylesheet" type="text/css" href="/leaflet/leaflet.css" />
-                <!-- Make sure you put this AFTER Leaflet's CSS -->
-                <script src="/leaflet/leaflet.js"></script>
-                <div id="mapinfo"></div>
-                <div id="map" style="height: 800px; border: 1px solid black"></div>
-                <script>
-			const layers = [ '${kml}', '${geoJson}' ];
-                        var map = L.map('map').setView([${lat}, ${long}], 13);
-			${tiles === 'osm' ? osmTiles : ''}
-
-			const colors = ['red','green','yellow'];
-			let color = 0;
-			layers.forEach( kml => {
-				if (kml && kml !== 'null') {
-					const colorToUse = colors[color];
-					color++;
-					fetch('/geojson/'+kml).then(function (response) {
-						response.text().then((geojson) => {
-							let highlighted = null;
-							// todo: actually use the colors
-							const geojsonJSON = JSON.parse(geojson);
-							const mapinfo = document.getElementById('mapinfo').innerHTML;
-							let header = 'Number of tracks: '+geojsonJSON.features.length+' <a href="javascript:history.back()">go back</a>';
-							if (mapinfo) {
-								header = mapinfo + " - " + header;
-							}
-							document.getElementById('mapinfo').innerHTML = header;
-							var defaultStyle = { color: colorToUse, weight: 2, fillOpacity: 0.2 };
-							var highlightStyle = { color: "#ff0000", weight: 5, fillOpacity: 0.7 };
-							let highlightedLayer;
-
-							function highlightFeature(e) {
-							    const layer = e.target;
-
-							    if (highlightedLayer === layer) {
-								// If already highlighted, remove it (toggle off)
-								geoJsonLayer.resetStyle(layer);
-								layer.bringToBack();
-								highlightedLayer = null;
-							    } else {
-
-								    // Reset previous highlight if it exists
-								    if (highlightedLayer) {
-									geoJsonLayer.resetStyle(highlightedLayer);
-								    }
-
-								    // Apply new highlight style
-								    layer.setStyle(highlightStyle);
-
-								    layer.bringToFront();
-								    highlightedLayer = layer; // Track current selection
-							    }
-							}
-
-							// Attach the event to your GeoJSON data
-							const geoJsonLayer = L.geoJson(geojsonJSON, {
-								style: function (feature) {
-									return {
-									    color: feature.properties.color,
-									    fillColor: feature.properties.fillColor,
-									    fillOpacity: feature.properties['fill-opacity'],
-									    weight: feature.properties.weight,
-									    dashArray: feature.properties.dashArray // Binds the dashed border option dynamically
-									};
-								    },
-							    onEachFeature: function (feature, layer) {
-							        if (feature.properties && feature.properties.name) {
-									layer.bindPopup(feature.properties.name);
-								}
-								layer.setStyle(defaultStyle);
-								layer.on({
-								    click: highlightFeature
-								});
-							    }
-							}).addTo(map);
-
-						});
-					}).catch(function (error) {
-						// There was an error
-						console.error("UNKOWN ERROR2", error);
-					});
-				}
-			})
-
-	</script>
-	`;
-	return leaflet;
-};
-
 // /map will load html with a map optionally substituted in
 app.get('/map/:kml?', (request: Request, response: Response) => {
-	const kmlfile = (request.params?.kml as string | undefined);
+	const kmlfile = request.params?.kml as string | undefined;
 	const tiles = (request.query?.tiles as string) || 'osm';
-	const leaflet = getMapHtml({ kml: kmlfile, lat: config.default_latitude, long: config.default_longitude, tiles: tiles });
+	const leaflet = renderMapHtml({ kml: kmlfile, lat: config.default_latitude, long: config.default_longitude, tiles: tiles });
 	response.send(leaflet);
 });
 
-// takes in a kml file and returns geojson of that file
+// takes in a kml or geojson file and returns its data with path traversal protection
 app.get('/geojson/:outfile', (request: Request, response: Response) => {
-	let outfile = String(request.params.outfile);
-	if (/^output_\d+\.kml$/.test(outfile)) {
-		logger.info("outfile:", outfile);
-		outfile = `${__dirname}/out/${outfile}`;
-		const geoJson = getGeoJsonFromFile(outfile);
-		response.send(geoJson);
+	const rawOutfile = String(request.params.outfile || '');
+	// Prevent path traversal by extracting only the basename
+	const safeBaseName = path.basename(rawOutfile);
+	const filePath = path.resolve(outDir, safeBaseName);
+
+	// Ensure the file is strictly inside outDir
+	if (!filePath.startsWith(outDir)) {
+		logger.warn("Potential path traversal blocked:", rawOutfile);
+		response.status(403).send("Forbidden");
+		return;
 	}
-	else if (/\d+\.geojson$/.test(outfile)) {
-		logger.info("outfile:", outfile);
-		outfile = `${__dirname}/out/${outfile}`;
-		response.sendFile(outfile);
+
+	if (!fs.existsSync(filePath)) {
+		response.status(404).send("File not found");
+		return;
 	}
-	else {
-		response.send(outfile);
+
+	if (/^output_\d+\.kml$/.test(safeBaseName)) {
+		logger.info("Serving KML converted to GeoJSON:", safeBaseName);
+		const geoJson = getGeoJsonFromFile(filePath);
+		response.json(geoJson);
+	} else if (/\.geojson$/.test(safeBaseName)) {
+		logger.info("Serving GeoJSON file:", safeBaseName);
+		response.sendFile(filePath);
+	} else {
+		response.sendFile(filePath);
 	}
 });
 
-// all kml files produced served from out/ (url will just be root)
+// all kml files produced served from out/
 app.use(express.static('out'));
 
 // leaflet source files
@@ -356,18 +214,17 @@ const _getInitialData = async (request: Request, response: Response): Promise<In
 	const lat = opts.location_center_lat || config.default_latitude;
 	const long = opts.location_center_long || config.default_longitude;
 	logger.debug("options: ", opts);
-	const data = await getStuff(opts);
+	const data = await defaultStravaService.getStuff(opts);
 	logger.trace("DATA", data);
 	if (!data) {
-		response.send('No data  found <a href="javascript:history.back()">go back</a>');
+		response.send('No data found <a href="javascript:history.back()">go back</a>');
 		return false;
-	}
-	else {
+	} else {
 		return { data, opts, lat, long };
 	}
 };
 
-// process will take lines from query string
+// process will take options from query string
 app.get('/process', async (request: Request, response: Response) => {
 	const result = await _getInitialData(request, response);
 	if (result) {
@@ -377,26 +234,35 @@ app.get('/process', async (request: Request, response: Response) => {
 		
 		const activities = data.activities;
 		const showHulls = opts?.showHulls === 'true';
-		const fileList = activities.map(activity => getCacheFileFromActivity(activity));
+		const fileList = activities.map(activity => defaultStravaService.getCacheFileFromActivity(activity));
 		const hulls = showHulls ? getSpatialAnalysis(fileList, 0.11, tolerance) : null;
 		const hullsGeoJson = hulls?.geoJSON;
 		const kmlTrack = data.kmlTrack;
+
 		if (!kmlTrack) {
-			response.send('No data  found <a href="javascript:history.back()">go back</a>');
-		}
-		else {
+			response.send('No data found <a href="javascript:history.back()">go back</a>');
+		} else {
 			const outputDate = `output_${Date.now()}`;
 			const kmlFileName = `${outputDate}.kml`;
 			const hullGeoJsonFileName = showHulls ? `hull_${outputDate}.geojson` : null;
 
-			const hullGeoJsonFullPath = `${__dirname}/out/${hullGeoJsonFileName}`;
-			const tracksFullPath = `${__dirname}/out/${kmlFileName}`;
-			outputFile(kmlTrack, tracksFullPath);
-			if (hullsGeoJson && hullGeoJsonFileName) {
-				outputFile(JSON.stringify(hullsGeoJson, null, 2), hullGeoJsonFullPath);
+			const hullGeoJsonFullPath = hullGeoJsonFileName ? path.join(outDir, hullGeoJsonFileName) : null;
+			const tracksFullPath = path.join(outDir, kmlFileName);
+
+			await outputFile(kmlTrack, tracksFullPath);
+			if (hullsGeoJson && hullGeoJsonFullPath) {
+				await outputFile(JSON.stringify(hullsGeoJson, null, 2), hullGeoJsonFullPath);
 			}
-			let html = `Download tracks: <a href="${kmlFileName}">${kmlFileName}</a>`;
-			html += getMapHtml({ kml: kmlFileName, lat: lat, long: long, tiles: opts.tiles, geoJson: hullGeoJsonFileName });
+
+			let html = `Download tracks: <a href="/${escapeHtml(kmlFileName)}">${escapeHtml(kmlFileName)}</a>`;
+			html += renderMapHtml({
+				kml: kmlFileName,
+				lat: lat,
+				long: long,
+				tiles: opts.tiles,
+				geoJson: hullGeoJsonFileName,
+				rateLimitReached: data.rateLimitReached
+			});
 			response.send(html);
 		}
 	}
@@ -404,19 +270,15 @@ app.get('/process', async (request: Request, response: Response) => {
 
 const getDaysInMonth = (monthYearStr: string): number => {
   const [monthStr, yearStr] = monthYearStr.split(' ');
-  const month = new Date(`${monthStr} 1, ${yearStr}`).getMonth(); // convert month name to month index
+  const month = new Date(`${monthStr} 1, ${yearStr}`).getMonth();
   const year = parseInt(yearStr, 10);
 
   const now = new Date();
   const currentYear = `${now.getFullYear()}`;
   const currentMonth = now.toLocaleString('default', { month: 'short' });
-  // use single equals, because one is number and the other is string
   if (monthStr === currentMonth && String(yearStr) === currentYear) {
-	// If we are in the current month, return days to today
 	return now.getDate();
   }
-
-  // Create a date for the first day of the next month, then subtract 1 day
   return new Date(year, month + 1, 0).getDate();
 };
 
@@ -429,7 +291,7 @@ interface BucketStats {
 }
 
 app.get('/stats', async (request: Request, response: Response) => {
-	logger.info("STATS");
+	logger.info("Generating stats page");
 	const req = { ...request } as Request;
 	req.query = { ...request.query, stats: 'true' };
 	const result = await _getInitialData(req, response);
@@ -437,8 +299,9 @@ app.get('/stats', async (request: Request, response: Response) => {
 	const types: Record<string, number> = {};
 	const buckets: Record<string, BucketStats> = {};
 	const dayBuckets: Record<string, BucketStats> = {};
+
 	if (result) {
-		const { data, opts } = result;
+		const { data } = result;
 		const { activities, activityProcessCounts } = data;
 		let elapsed = 0;
 		let moving = 0;
@@ -447,11 +310,12 @@ app.get('/stats', async (request: Request, response: Response) => {
 		let tracksHtml = `<table class="styled-table"><thead><tr><td>date</td><td>moving time</td><td>elapsed time</td><td>distance</td><td>elevation</td><td>track name</td></tr></thead><tbody>`;
 		const trackArray: string[] = [];
 		const badGPS: string[] = [];
+
 		activities.forEach(track => {
 			elapsed += track.elapsed_time;
 			moving += track.moving_time;
 			const startDate = Date.parse(track.start_date);
-			const trackName = `<a target="_blank" href="https://www.strava.com/activities/${track.id}">${track.name}</a>`;
+			const trackName = `<a target="_blank" href="https://www.strava.com/activities/${track.id}">${escapeHtml(track.name)}</a>`;
 			let goodGPS = true;
 			if (!track.start_latlng && !track.upload_id) {
 				goodGPS = false;
@@ -476,7 +340,7 @@ app.get('/stats', async (request: Request, response: Response) => {
 			dayBuckets[dayBucket].elapsed += track.elapsed_time;
 			dayBuckets[dayBucket].moving += track.moving_time;
 
-			if (foot.indexOf(track.type) !== -1) {
+			if (foot.includes(track.type)) {
 				buckets[bucket].steps = (buckets[bucket].steps || 0) + (track.steps || 0);
 				dayBuckets[dayBucket].steps = (dayBuckets[dayBucket].steps || 0) + (track.steps || 0);
 			}
@@ -497,100 +361,26 @@ app.get('/stats', async (request: Request, response: Response) => {
 				badGear.push(track);
 			}
 		});
+
 		tracksHtml += trackArray.reverse().join('\n');
 		tracksHtml += '</tbody></table>';
-		logger.trace("DATA", data);
-		logger.trace("OPTS", opts);
-		const days = earliest && latest ? (latest - earliest) / 1000 / 60 / 60 / 24 : 1;
-		const hours = elapsed / 60 / 60;
-		const moving_hours = moving / 60 / 60;
-		let html = '';
-		html += `<html><head><title>Strava Stats</title><link rel="stylesheet" href="/assets/basic.css"></head>`;
-		html += `<body>`;
-		html += "<h1>Stats</h1>";
-		html += '<a href="javascript:history.back()">go back</a>';
 
-		html += `<table class="styled-table"><thead><tr><th>Description</th><th>Value</th></tr></thead>`;
-		html += `<tbody>`;
-		html += `<tr><td>Total time</td><td> ${Number.parseFloat(String(hours)).toFixed(2)} hours</td></tr>`;
-		html += `<tr><td>Activites </td><td> ${activities.length}</td></tr>`;
-		html += `<tr><td>First     </td><td> ${earliest ? new Date(earliest).toLocaleString() : 'N/A'}</td></tr>`;
-		html += `<tr><td>Last      </td><td> ${latest ? new Date(latest).toLocaleString() : 'N/A'}</td></tr>`;
-		html += `<tr><td>Days      </td><td> ${Number.parseFloat(String(days)).toFixed(2)} days</td></tr>`;
-		html += `<tr><td>Hours/Day </td><td> ${Number.parseFloat(String(hours / days)).toFixed(2)} hours</td></tr>`;
-		html += `<tr><td>Moving Hours/Day </td><td> ${Number.parseFloat(String(moving_hours / days)).toFixed(2)}</td></tr>`;
-		html += `<tr><td>Moving Hours</td><td>${Number.parseFloat(String(moving_hours)).toFixed(2)}</td></tr>`;
-		html += `<tr><td>Activities/Day </td><td> ${Number.parseFloat(String(activities.length / days)).toFixed(2)} activities</td></tr>`;
-		html += `<tr><td>Hours/Activity </td><td> ${Number.parseFloat(String(hours / activities.length)).toFixed(2)} hours</td></tr>`;
-		html += `<tr><td>Yearly Estimate</td><td> ${Number.parseFloat(String((hours / days) * 365)).toFixed(2)} hours</td></tr>`;
-		html += `<tr><td>Yearly Moving Estimate</td><td> ${Number.parseFloat(String((moving_hours / days) * 365)).toFixed(2)} hours</td></tr>`;
-		html += `</tbody></table>`;
-		const tracksWithMissingGear = badGear.map(track => `<a target="_blank" href="https://www.strava.com/activities/${track.id}">${track.name}</a><br />`).join('') || 'None';
-		html += `\n<h2>Tracks with missing gear:</h2>\n ${tracksWithMissingGear}`;
-		html += `\n<h2>Types</h2>\n<table class="styled-table"><thead><tr><th>type</th><th>activities</th></tr></thead><tbody>`;
-		html += Object.keys(types)
-			.sort((a, b) => types[a] - types[b])
-			.map(type => `<tr><td>${type}</td><td>${types[type]}</td></tr>`)
-			.join('\n');
-		html += `</tbody></table>`;
+		const html = renderStatsHtml({
+			activities,
+			activityProcessCounts,
+			elapsed,
+			moving,
+			earliest,
+			latest,
+			tracksHtml,
+			badGPS,
+			badGear,
+			types,
+			buckets,
+			dayBuckets,
+			rateLimitReached: data.rateLimitReached
+		}, getDaysInMonth, metersToMiles);
 
-		html += '<h2>Activity Filter Counts</h2>';
-		html += '<table class="styled-table"><thead><tr><td>filter</td><td>count</td></tr></thead><tbody>';
-		Object.keys(activityProcessCounts).forEach(label => {
-			html += `<tr><td>${label}</td><td>${activityProcessCounts[label]}</td></tr>`;
-		});
-		html += '</tbody></table>';
-
-		html += `\n<h2>Monthly stats (hours elapsed time)</h2>`;
-		html += `\n<table class="styled-table"><thead><tr><th>Month</th><th>Total</th><th>Daily Average*</th><th>distance (miles)</th><th>climb (feet)</th></tr></thead><tbody>`;
-		html += Object.keys(buckets)
-			.sort((a, b) => new Date(a).getTime() - new Date(b).getTime())
-			.map(bucket => {
-				return `<tr><td>${bucket}</td>`
-					+ `<td>${Number.parseFloat(String(buckets[bucket].elapsed / 60 / 60)).toFixed(2)}</td>`
-					+ `<td>${Number.parseFloat(String((buckets[bucket].elapsed / 60 / 60) / getDaysInMonth(bucket))).toFixed(2)}</td>`
-					+ `<td>${Number.parseFloat(String(metersToMiles(buckets[bucket].distance))).toFixed(2)}</td>`
-					+ `<td>${Number.parseFloat(String(buckets[bucket].climb * 3.28084)).toFixed(0)}</td>`
-					+ `</tr>`;	
-			})
-			.join('\n');
-		html += `</tbody></table>`;
-		html += `* current month is average daily to date`;
-		html += `\n<h2>Daily stats</h2>`;
-		html += `\n<table class="styled-table"><thead><tr><th>Date</th><th>Daily elapsed</th><th>YTD Elapsed</th><th>Daily moving</th><th>YTD moving</th><th>non moving</th><th>distance</th><th>climb</th></tr></thead><tbody>`;
-		let year = 0;
-		let yearCount = 0;
-		let yearCountMoving = 0;
-		html += Object.keys(dayBuckets)
-			.sort((a, b) => new Date(a).getTime() - new Date(b).getTime())
-			.map(bucket => {
-				const currentYear = new Date(bucket).getFullYear();
-				if (year !== currentYear) {
-					year = currentYear;
-					yearCount = 0;
-					yearCountMoving = 0;
-				}
-				yearCount += dayBuckets[bucket].elapsed;
-				yearCountMoving += dayBuckets[bucket].moving;
-				return `<tr><td>${bucket}</td>`
-					+ `<td>${Number.parseFloat(String(dayBuckets[bucket].elapsed / 60 / 60)).toFixed(2)}</td>`
-					+ `<td>${Number.parseFloat(String(yearCount / 60 / 60)).toFixed(2)}</td>`
-					+ `<td>${Number.parseFloat(String(dayBuckets[bucket].moving / 60 / 60)).toFixed(2)}</td>`
-					+ `<td>${Number.parseFloat(String(yearCountMoving / 60 / 60)).toFixed(2)}</td>`
-					+ `<td>${Number.parseFloat(String(dayBuckets[bucket].elapsed / 60 / 60 - dayBuckets[bucket].moving / 60 / 60)).toFixed(2)}</td>`
-					+ `<td>${Number.parseFloat(String(metersToMiles(dayBuckets[bucket].distance))).toFixed(2)}</td>`
-					+ `<td>${Number.parseFloat(String((dayBuckets[bucket].climb) * 3.28084)).toFixed(0)}</td>`
-					+ `</tr>`;
-			})
-			.join('\n');
-		html += `</tbody></table>`;
-
-		html += `<h2>All tracks</h2>` + tracksHtml;
-
-		html += `<h2>Tracks with missing GPS (${badGPS.length})</h2>`;
-		html += badGPS.join('<br />\n');
-
-		html += `</body></html>`;
 		response.send(html);
 	}
 });

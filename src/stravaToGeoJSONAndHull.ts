@@ -1,11 +1,7 @@
-// TODO: Use the already simplified versions in KML so that we match
-// This uses a higher number which does more simplification
-// Other takes tolerance from form and divides by 10000
-//const tol = 0.0005;
-// const tol = 0.000006;
 import fs from 'fs';
 import * as turf from '@turf/turf';
 import tokml from 'tokml';
+import RBush from 'rbush';
 
 export interface SpatialAnalysisResult {
     geoJSON: GeoJSON.FeatureCollection;
@@ -20,6 +16,14 @@ interface TrackItem {
     bbox: GeoJSON.BBox;
 }
 
+interface RBushItem {
+    minX: number;
+    minY: number;
+    maxX: number;
+    maxY: number;
+    id: number;
+}
+
 interface GroupData {
     points: GeoJSON.Position[];
     totalTrackMiles: number;
@@ -29,6 +33,7 @@ interface GroupData {
 /**
  * Advanced track analyzer with visual style differentiation for nested/intersecting components
  * and automated relational tracking output logs.
+ * Uses RBush spatial index for fast intersection testing.
  */
 export function getSpatialAnalysis(
     fileList: string[],
@@ -107,22 +112,38 @@ export function getSpatialAnalysis(
         if (rootI !== rootJ) parent[rootI] = rootJ;
     }
 
-    // 3. Process Intersections
-    console.log(`🔍 Mapping spatial intersections...`);
+    // 3. Process Intersections using RBush Spatial Index
+    console.log(`🔍 Mapping spatial intersections with RBush spatial index...`);
+    const tree = new RBush<RBushItem>();
+    const treeItems: RBushItem[] = items.map(item => ({
+        minX: item.bbox[0],
+        minY: item.bbox[1],
+        maxX: item.bbox[2],
+        maxY: item.bbox[3],
+        id: item.id
+    }));
+    tree.load(treeItems);
+
     for (let i = 0; i < N; i++) {
         const itemA = items[i];
         const bboxA = itemA.bbox;
 
-        for (let j = i + 1; j < N; j++) {
+        // Query spatial index for candidate bounding boxes
+        const candidates = tree.search({
+            minX: bboxA[0],
+            minY: bboxA[1],
+            maxX: bboxA[2],
+            maxY: bboxA[3]
+        });
+
+        for (const candidate of candidates) {
+            const j = candidate.id;
+            // Only test upper triangle pairs to avoid duplicate checks
+            if (j <= i) continue;
             if (find(i) === find(j)) continue;
 
             const itemB = items[j];
-            const bboxB = itemB.bbox;
-
-            const overlapsBBox = !(bboxB[0] > bboxA[2] || bboxB[2] < bboxA[0] ||
-                                   bboxB[1] > bboxA[3] || bboxB[3] < bboxA[1]);
-
-            if (overlapsBBox && turf.booleanIntersects(itemA.collisionPoly, itemB.collisionPoly)) {
+            if (turf.booleanIntersects(itemA.collisionPoly, itemB.collisionPoly)) {
                 union(i, j);
             }
         }
