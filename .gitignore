@@ -16,3 +16,4 @@ creds/
 # misc
 .DS_Store
 *.swp
+dist/

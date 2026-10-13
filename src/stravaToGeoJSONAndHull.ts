@@ -4,34 +4,58 @@
 //const tol = 0.0005;
 // const tol = 0.000006;
 import fs from 'fs';
-import path from 'path';
 import * as turf from '@turf/turf';
 import tokml from 'tokml';
+
+export interface SpatialAnalysisResult {
+    geoJSON: GeoJSON.FeatureCollection;
+    kml: string;
+}
+
+interface TrackItem {
+    id: number;
+    rawPoints: GeoJSON.Position[];
+    trackMiles: number;
+    collisionPoly: GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon>;
+    bbox: GeoJSON.BBox;
+}
+
+interface GroupData {
+    points: GeoJSON.Position[];
+    totalTrackMiles: number;
+    trackCount: number;
+}
 
 /**
  * Advanced track analyzer with visual style differentiation for nested/intersecting components
  * and automated relational tracking output logs.
  */
-export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simplifyTolerance = 0.0003) {
+export function getSpatialAnalysis(
+    fileList: string[],
+    intersectionFudgeMeters: number = 10,
+    simplifyTolerance: number = 0.0003
+): SpatialAnalysisResult | null {
     console.log(`\n🚀 Processing ${fileList.length} files...`);
     console.time("⏱️ Total Execution Time");
 
     const fudgeKm = intersectionFudgeMeters / 1000;
-    let items = [];
+    const items: TrackItem[] = [];
 
     // 1. Ingest, Simplify, and Calculate Track Lengths
     fileList.forEach((filePath, index) => {
         try {
             const rawData = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-            let coords = [];
+            let coords: GeoJSON.Position[] = [];
 
             if (Array.isArray(rawData)) {
-                const latLngObj = rawData.find(i => i.type === 'latlng');
-                if (latLngObj?.data) coords = latLngObj.data.map(c => [c[1], c[0]]);
+                const latLngObj = rawData.find((i: any) => i.type === 'latlng');
+                if (latLngObj?.data) coords = latLngObj.data.map((c: [number, number]) => [c[1], c[0]]);
             } else if (rawData.type === 'FeatureCollection' || rawData.type === 'Feature') {
-                const fc = rawData.type === 'FeatureCollection' ? rawData : turf.featureCollection([rawData]);
-                fc.features.forEach(f => {
-                    if (f.geometry?.type === 'LineString') coords.push(...f.geometry.coordinates);
+                const fc: GeoJSON.FeatureCollection = rawData.type === 'FeatureCollection' ? rawData : turf.featureCollection([rawData]);
+                fc.features.forEach((f: GeoJSON.Feature) => {
+                    if (f.geometry?.type === 'LineString') {
+                        coords.push(...(f.geometry as GeoJSON.LineString).coordinates);
+                    }
                 });
             }
 
@@ -40,7 +64,9 @@ export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simpl
             const rawLine = turf.lineString(coords);
             const trackMiles = turf.length(rawLine, { units: 'miles' });
             const simplified = turf.simplify(rawLine, { tolerance: simplifyTolerance, highQuality: false });
-            const collisionPoly = turf.buffer(simplified, fudgeKm, { units: 'kilometers' });
+            const collisionPoly = turf.buffer(simplified, fudgeKm, { units: 'kilometers' }) as GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon> | undefined;
+
+            if (!collisionPoly) return;
 
             items.push({
                 id: items.length,
@@ -51,7 +77,7 @@ export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simpl
             });
 
             if ((index + 1) % 100 === 0) console.log(`  📂 Loaded ${index + 1} files...`);
-        } catch (err) {
+        } catch (err: any) {
             console.error(`  ❌ Error parsing file:`, err.message);
         }
     });
@@ -63,19 +89,19 @@ export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simpl
     const parent = new Int32Array(N);
     for (let i = 0; i < N; i++) parent[i] = i;
 
-    function find(i) {
+    function find(i: number): number {
         let root = i;
         while (root !== parent[root]) root = parent[root];
         let curr = i;
         while (curr !== root) {
-            let nxt = parent[curr];
+            const nxt = parent[curr];
             parent[curr] = root;
             curr = nxt;
         }
         return root;
     }
 
-    function union(i, j) {
+    function union(i: number, j: number): void {
         const rootI = find(i);
         const rootJ = find(j);
         if (rootI !== rootJ) parent[rootI] = rootJ;
@@ -104,13 +130,13 @@ export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simpl
 
     // 4. Aggregate Points, Track Mileage, and Track Counts
     console.log(`🧩 Aggregating data into clusters...`);
-    const groupMap = new Map();
+    const groupMap = new Map<number, GroupData>();
     for (let i = 0; i < N; i++) {
         const root = find(i);
         if (!groupMap.has(root)) {
             groupMap.set(root, { points: [], totalTrackMiles: 0, trackCount: 0 });
         }
-        const data = groupMap.get(root);
+        const data = groupMap.get(root)!;
         data.points.push(...items[i].rawPoints);
         data.totalTrackMiles += items[i].trackMiles;
         data.trackCount += 1;
@@ -118,14 +144,14 @@ export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simpl
 
     // 5. Generate Initial Hulls
     console.log(`📐 Constructing base hulls...`);
-    let tempHulls = [];
+    let tempHulls: Array<GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon> & { bbox?: GeoJSON.BBox }> = [];
     let idx = 1;
 
-    for (const [rootId, data] of groupMap.entries()) {
+    for (const [, data] of groupMap.entries()) {
         if (data.points.length < 3) continue;
 
         const ptCollection = turf.featureCollection(data.points.map(p => turf.point(p)));
-        const hull = turf.convex(ptCollection);
+        const hull = turf.convex(ptCollection) as (GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon> & { bbox?: GeoJSON.BBox }) | null;
 
         if (hull) {
             const areaSqMiles = turf.area(hull) * 0.000000386102;
@@ -136,7 +162,7 @@ export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simpl
                 total_track_mi: parseFloat(data.totalTrackMiles.toFixed(2)),
                 track_count: data.trackCount,
                 relationship: "Independent",
-                related_to: []
+                related_to: [] as string[]
             };
 
             hull.bbox = turf.bbox(hull);
@@ -146,7 +172,7 @@ export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simpl
 
     // 6. Cross-Hull Relationship Identification
     console.log(`📡 Analyzing relationships between hulls...`);
-    let relationshipLog = [];
+    const relationshipLog: string[] = [];
 
     for (let i = 0; i < tempHulls.length; i++) {
         for (let j = 0; j < tempHulls.length; j++) {
@@ -154,14 +180,16 @@ export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simpl
 
             const hullA = tempHulls[i];
             const hullB = tempHulls[j];
+            const bboxA = hullA.bbox!;
+            const bboxB = hullB.bbox!;
 
             // Evaluate if Hull B is strictly larger in area than Hull A
-            if (hullB.properties.area_sq_mi <= hullA.properties.area_sq_mi) continue;
+            if (hullA.properties && hullB.properties && hullB.properties.area_sq_mi <= hullA.properties.area_sq_mi) continue;
 
-            const overlaps = !(hullB.bbox[0] > hullA.bbox[2] || hullB.bbox[2] < hullA.bbox[0] ||
-                               hullB.bbox[1] > hullA.bbox[3] || hullB.bbox[3] < hullA.bbox[1]);
+            const overlaps = !(bboxB[0] > bboxA[2] || bboxB[2] < bboxA[0] ||
+                               bboxB[1] > bboxA[3] || bboxB[3] < bboxA[1]);
 
-            if (overlaps) {
+            if (overlaps && hullA.properties && hullB.properties) {
                 if (turf.booleanContains(hullB, hullA)) {
                     hullA.properties.relationship = "Fully Contained";
                     hullA.properties.related_to.push(`Area Component ${hullB.properties.id}`);
@@ -178,11 +206,11 @@ export function getSpatialAnalysis(fileList, intersectionFudgeMeters = 10, simpl
     }
 
     // 7. Sort Hulls by Area (Descending) for Layer Stacking in Leaflet
-    tempHulls.sort((a, b) => b.properties.area_sq_mi - a.properties.area_sq_mi);
+    tempHulls.sort((a, b) => b.properties!.area_sq_mi - a.properties!.area_sq_mi);
 
     // 8. Final Naming and Specific Visual Style Formats
     const finalFeatures = tempHulls.map(hull => {
-        const props = hull.properties;
+        const props = hull.properties!;
         let relationshipContext = "";
 
         if (props.relationship !== "Independent") {
