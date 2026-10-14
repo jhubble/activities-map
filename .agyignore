@@ -1,0 +1,8 @@
+# Ignore all files and directories in the project root
+/*
+
+# Un-ignore the src directory and everything inside it
+!/src/
+!/package.json
+!/package-lock.json
+!/eslint.config.mjs
