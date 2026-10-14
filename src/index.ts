@@ -10,7 +10,7 @@ import { getSpatialAnalysis } from './stravaToGeoJSONAndHull.js';
 import config from './config.js';
 import type { StravaActivity, GetStuffOptions, GetStuffResult } from './types/index.js';
 import { escapeHtml } from './utils/html.js';
-import { renderHomePage, renderOptionsForm, renderMapHtml, renderStatsHtml } from './views/templates.js';
+import { renderUnifiedForm, renderMapHtml, renderStatsHtml } from './views/templates.js';
 
 logger.info("starting activities-map application");
 const app = express();
@@ -58,14 +58,19 @@ const OPTIONS: Record<string, OptionConfig> = {
 };
 
 const outputLabel = (optionKey: string, name?: string): string => {
-	return `<label>${escapeHtml(name || optionKey)}</label>:`;
+	return `<label for="${escapeHtml(optionKey)}">${escapeHtml(name || optionKey)}</label>`;
 };
 
-const outputArrayValues = (optionKey: string, optionValue: any[], name?: string): string => {
-	let html = outputLabel(optionKey, name);
-	html += `<select name="${escapeHtml(optionKey)}">`;
+const outputArrayValues = (optionKey: string, optionValue: any[], name?: string, note?: string): string => {
+	let html = `<div class="form-group">`;
+	html += outputLabel(optionKey, name);
+	html += `<select id="${escapeHtml(optionKey)}" class="form-control" name="${escapeHtml(optionKey)}">`;
 	html += optionValue.map(k => `<option value="${escapeHtml(k)}">${escapeHtml(k)}</option>`).join('');
 	html += "</select>";
+	if (note) {
+		html += `<span class="note">${escapeHtml(note)}</span>`;
+	}
+	html += "</div>";
 	return html;
 };
 
@@ -74,43 +79,48 @@ const processOption = (optionKey: string, optionValue: OptionConfig): string => 
 		return outputArrayValues(optionKey, optionValue);
 	}
 	if (typeof optionValue === 'string') {
-		return `<label>${escapeHtml(optionKey)}</label>: <input type="text" name="${escapeHtml(optionKey)}" value="${escapeHtml(optionValue)}"></input>`;
+		return `<div class="form-group">
+			<label for="${escapeHtml(optionKey)}">${escapeHtml(optionKey)}</label>
+			<input type="text" id="${escapeHtml(optionKey)}" class="form-control" name="${escapeHtml(optionKey)}" value="${escapeHtml(optionValue)}">
+		</div>`;
 	}
 	if (typeof optionValue === 'object' && optionValue !== null) {
-		let html = '';
 		if (Array.isArray(optionValue.values)) {
-			html += outputArrayValues(optionKey, optionValue.values, optionValue.name);
+			return outputArrayValues(optionKey, optionValue.values, optionValue.name, optionValue.note);
 		} else {
-			html = outputLabel(optionKey, optionValue.name);
-			html += `<input type="text" name="${escapeHtml(optionValue.key || optionKey)}" value="${escapeHtml(optionValue.default)}"></input>`;
+			const inputKey = optionValue.key || optionKey;
+			return `<div class="form-group">
+				<label for="${escapeHtml(inputKey)}">${escapeHtml(optionValue.name || optionKey)}</label>
+				<input type="text" id="${escapeHtml(inputKey)}" class="form-control" name="${escapeHtml(inputKey)}" value="${escapeHtml(optionValue.default || '')}">
+				${optionValue.note ? `<span class="note">${escapeHtml(optionValue.note)}</span>` : ''}
+			</div>`;
 		}
-		html += `<span> ${escapeHtml(optionValue.note || '')}</span>`;
-		return html;
 	}
 	return '';
 };
 
 const processOptions = (options: Record<string, OptionConfig>): string => {
 	const html = Object.entries(options).map(o => processOption(o[0], o[1]));
-	return html.join('<br>');
+	return html.join('\n');
 };
-
-// default entry point - shows static home page
-app.get('/', (_request: Request, response: Response) => {
-	const authUrl = getAuthURL();
-	response.send(renderHomePage(authUrl));
-});
 
 const getOptionForm = (token?: string, athleteid?: number | string, refresh: boolean = false): string => {
 	const authUrl = getAuthURL("coderefresh");
-	logger.info("Token from options form:", token);
+	logger.info("Rendering option form with token:", token ? "(present)" : "(none)");
 	const options: Record<string, OptionConfig> = JSON.parse(JSON.stringify(OPTIONS));
 	if (!token) {
 		options.checkForNewer = [false, true];
 	}
 	const htmlOptions = processOptions(options);
-	return renderOptionsForm(htmlOptions, authUrl, token, athleteid, refresh);
+	return renderUnifiedForm({ htmlOptions, authUrl, token, athleteid, refresh });
 };
+
+// default entry point - shows unified main form with integrated auth status
+app.get('/', (request: Request, response: Response) => {
+	const token = request.query?.token as string | undefined;
+	const athleteid = request.query?.athleteid as string | undefined;
+	response.send(getOptionForm(token, athleteid));
+});
 
 app.get('/formClient.js', (_req: Request, res: Response) => {
 	logger.info("serving form client");
