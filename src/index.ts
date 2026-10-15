@@ -124,7 +124,11 @@ app.get('/', (request: Request, response: Response) => {
 
 app.get('/formClient.js', (_req: Request, res: Response) => {
 	logger.info("serving form client");
-	res.sendFile(path.join(__dirname, 'src/formClient.js'));
+	// TypeScript builds the browser client into dist, while `npm start` serves
+	// the plain JavaScript source directly.
+	const builtClient = path.join(__dirname, 'dist/formClient.js');
+	const sourceClient = path.join(__dirname, 'src/formClient.js');
+	res.sendFile(fs.existsSync(builtClient) ? builtClient : sourceClient);
 });
 
 app.get('/code', (request: Request, response: Response) => {
