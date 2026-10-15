@@ -5,7 +5,27 @@ function saveFormData() {
 
 	const formData = new FormData(form);
 	const dataObject = Object.fromEntries(formData.entries());
-	localStorage.setItem("formData", JSON.stringify(dataObject));
+	localStorage.setItem('formData', JSON.stringify(dataObject));
+	if (dataObject.token) {
+		localStorage.setItem('stravaToken', dataObject.token);
+	}
+}
+
+function initializeFormState() {
+	const form = document.getElementById('myForm');
+	if (!form) return;
+
+	const tokenInput = form.querySelector('[name="token"]');
+	const pageToken = tokenInput?.value || '';
+	const savedToken = localStorage.getItem('stravaToken');
+	restoreFormData(form);
+	if (tokenInput) {
+		tokenInput.value = pageToken || savedToken || tokenInput.value;
+		if (tokenInput.value) {
+			localStorage.setItem('stravaToken', tokenInput.value);
+		}
+	}
+	form.addEventListener('submit', saveFormData);
 }
 
 function restoreFormData(form) {
@@ -18,8 +38,6 @@ function restoreFormData(form) {
 	if (savedData) {
 		const data = JSON.parse(savedData);
 		for (const key in data) {
-			if (key === 'token') continue;
-
 			const input = form.querySelector(`[name="${key}"]`);
 			if (input) {
 				if (input.type === 'checkbox' || input.type === 'radio') {
@@ -34,3 +52,4 @@ function restoreFormData(form) {
 
 window.saveFormData = saveFormData;
 window.restoreFormData = restoreFormData;
+window.initializeFormState = initializeFormState;

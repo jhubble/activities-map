@@ -42,7 +42,7 @@ export function renderUnifiedForm({
       <a class="quick-nav-link" href="/map">
         <span>📍</span> View Current Map
       </a>
-      <a class="quick-nav-link" href="/stats">
+      <a class="quick-nav-link" href="/stats" onclick="saveFormData()">
         <span>📊</span> View Statistics
       </a>
     </nav>
@@ -101,7 +101,7 @@ export function renderUnifiedForm({
   </div>
 
   <script src="/formClient.js"></script>
-  ${refresh ? '<script>restoreFormData()</script>' : ''}
+  <script>initializeFormState()</script>
 </body>
 </html>`;
 }
