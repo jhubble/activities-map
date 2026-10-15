@@ -41,12 +41,6 @@ export function renderUnifiedForm({
       <a class="quick-nav-link primary" id="refresh" onclick="saveFormData()" href="${escapeHtml(authUrl)}">
         <span>⚡</span> ${hasToken ? 'Re-authenticate with Strava' : 'Connect with Strava'}
       </a>
-      <a class="quick-nav-link" href="/map">
-        <span>📍</span> View Current Map
-      </a>
-      <a class="quick-nav-link" href="/stats" onclick="saveFormData()">
-        <span>📊</span> View Statistics
-      </a>
     </nav>
 
     ${authError ? `
@@ -104,7 +98,7 @@ export function renderUnifiedForm({
         </div>
 
         <div class="actions-bar">
-          <button type="submit" class="btn btn-primary">
+          <button type="submit" formaction="/process" class="btn btn-primary">
             <span>🗺️</span> Generate Map
           </button>
           <button type="submit" formaction="/stats" class="btn btn-secondary">
@@ -121,6 +115,11 @@ export function renderUnifiedForm({
 
   <script src="/formClient.js"></script>
   <script>initializeFormState()</script>
+  <script>
+    if (location.pathname === '/code' || location.pathname === '/coderefresh') {
+      history.replaceState(null, '', '/');
+    }
+  </script>
 </body>
 </html>`;
 }

@@ -29,12 +29,13 @@ function initializeFormState() {
 		event.preventDefault();
 		saveFormData();
 		const submitter = event.submitter;
-		const action = submitter?.formAction || form.action;
+		const action = submitter?.getAttribute('formaction') || form.getAttribute('action') || '/process';
+		const actionUrl = new URL(action, window.location.href);
 		const formData = new FormData(form);
 		const params = new URLSearchParams(formData);
 		const jobId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 		params.set('jobId', jobId);
-		showProcessingStatus('Starting…');
+		showProcessingStatus(actionUrl.pathname === '/stats' ? 'Starting detailed stats…' : 'Starting map generation…');
 		const statusTimer = window.setInterval(async () => {
 			try {
 				const statusResponse = await fetch(`/progress/${encodeURIComponent(jobId)}`, { cache: 'no-store' });
@@ -46,10 +47,14 @@ function initializeFormState() {
 				showProcessingStatus('Still working…');
 			}
 		}, 700);
-		fetch(`${action}?${params.toString()}`)
+		fetch(`${actionUrl.pathname}?${params.toString()}`)
 			.then(async (response) => {
-				if (!response.ok) throw new Error(`Request failed (${response.status})`);
-				return response.text();
+				const body = await response.text();
+				if (!response.ok) {
+					const errorDocument = new DOMParser().parseFromString(body, 'text/html');
+					throw new Error(errorDocument.body.textContent.trim() || `Request failed (${response.status})`);
+				}
+				return body;
 			})
 			.then((html) => {
 				window.clearInterval(statusTimer);

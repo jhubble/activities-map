@@ -273,8 +273,11 @@ app.get('/progress/:jobId', (request: Request, response: Response) => {
 
 // process will take options from query string
 app.get('/process', async (request: Request, response: Response) => {
-	const result = await _getInitialData(request, response);
-	if (result) {
+	const jobId = typeof request.query.jobId === 'string' ? request.query.jobId : undefined;
+	logger.info("Generating map", jobId ? `job ${jobId}` : "without job id");
+	try {
+		const result = await _getInitialData(request, response);
+		if (!result) return;
 		const { data, opts, lat, long } = result;
 		const tolerance = opts.tolerance ? opts.tolerance / 10000 : 0.00006;
 		logger.info("TOLERANCE", opts.tolerance, " - adjusted value used:", tolerance);
@@ -282,40 +285,45 @@ app.get('/process', async (request: Request, response: Response) => {
 		const activities = data.activities;
 		const showHulls = opts?.showHulls === 'true';
 		const fileList = activities.map(activity => defaultStravaService.getCacheFileFromActivity(activity));
-		const jobId = typeof request.query.jobId === 'string' ? request.query.jobId : undefined;
 		if (jobId) jobProgress.set(jobId, showHulls ? 'Calculating activity hulls and spatial relationships…' : 'Preparing the map and track files…');
 		const hulls = showHulls ? getSpatialAnalysis(fileList, 0.11, tolerance) : null;
 		const hullsGeoJson = hulls?.geoJSON;
 		const kmlTrack = data.kmlTrack;
 
 		if (!kmlTrack) {
-			response.send('No data found <a href="javascript:history.back()">go back</a>');
-		} else {
-			const outputDate = `output_${Date.now()}`;
-			const kmlFileName = `${outputDate}.kml`;
-			const hullGeoJsonFileName = showHulls ? `hull_${outputDate}.geojson` : null;
-
-			const hullGeoJsonFullPath = hullGeoJsonFileName ? path.join(outDir, hullGeoJsonFileName) : null;
-			const tracksFullPath = path.join(outDir, kmlFileName);
-
-			if (jobId) jobProgress.set(jobId, 'Writing map and GeoJSON files…');
-			await outputFile(kmlTrack, tracksFullPath);
-			if (hullsGeoJson && hullGeoJsonFullPath) {
-				await outputFile(JSON.stringify(hullsGeoJson, null, 2), hullGeoJsonFullPath);
-			}
-
-			let html = `Download tracks: <a href="/${escapeHtml(kmlFileName)}">${escapeHtml(kmlFileName)}</a>`;
-			html += renderMapHtml({
-				kml: kmlFileName,
-				lat: lat,
-				long: long,
-				tiles: opts.tiles,
-				geoJson: hullGeoJsonFileName,
-				rateLimitReached: data.rateLimitReached
-			});
-			response.send(html);
-			if (jobId) jobProgress.delete(jobId);
+			response.send('No track data was produced. <a href="javascript:history.back()">Go back</a>');
+			return;
 		}
+
+		const outputDate = `output_${Date.now()}`;
+		const kmlFileName = `${outputDate}.kml`;
+		const hullGeoJsonFileName = showHulls ? `hull_${outputDate}.geojson` : null;
+		const hullGeoJsonFullPath = hullGeoJsonFileName ? path.join(outDir, hullGeoJsonFileName) : null;
+		const tracksFullPath = path.join(outDir, kmlFileName);
+
+		if (jobId) jobProgress.set(jobId, 'Writing map and GeoJSON files…');
+		await outputFile(kmlTrack, tracksFullPath);
+		if (hullsGeoJson && hullGeoJsonFullPath) {
+			await outputFile(JSON.stringify(hullsGeoJson, null, 2), hullGeoJsonFullPath);
+		}
+
+		let html = `Download tracks: <a href="/${escapeHtml(kmlFileName)}">${escapeHtml(kmlFileName)}</a>`;
+		html += renderMapHtml({
+			kml: kmlFileName,
+			lat,
+			long,
+			tiles: opts.tiles,
+			geoJson: hullGeoJsonFileName,
+			rateLimitReached: data.rateLimitReached
+		});
+		response.send(html);
+	} catch (error) {
+		logger.error("Map generation failed", error);
+		if (!response.headersSent) {
+			response.status(500).send(`<h1>Map generation failed</h1><p>${escapeHtml(error instanceof Error ? error.message : String(error))}</p><p><a href="javascript:history.back()">Go back</a></p>`);
+		}
+	} finally {
+		if (jobId) jobProgress.delete(jobId);
 	}
 });
 
