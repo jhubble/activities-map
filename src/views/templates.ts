@@ -134,6 +134,10 @@ export function renderMapHtml({
 }): string {
   const safeKml = encodeURIComponent(kml);
   const safeGeoJson = geoJson ? encodeURIComponent(geoJson) : '';
+  const serializedLayers = JSON.stringify([safeKml, safeGeoJson])
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026');
   const rateLimitNotice = rateLimitReached
     ? `<div class="alert alert-warning" style="margin: 16px;">
         <strong>Notice:</strong> Strava 15-minute API rate limit reached. Downloaded tracks were cached. Re-run after 15 minutes to continue downloading additional tracks.
@@ -192,7 +196,7 @@ export function renderMapHtml({
       <div id="map"></div>
     </div>
     <script>
-      const layers = [ '${safeKml}', '${safeGeoJson}' ];
+      const layers = ${serializedLayers};
       var map = L.map('map').setView([${Number(lat)}, ${Number(long)}], 13);
       ${tiles === 'osm' ? osmTiles : ''}
 

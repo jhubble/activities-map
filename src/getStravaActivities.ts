@@ -114,14 +114,19 @@ export class StravaService {
 	} = {}): Promise<StravaActivity[]> {
 		logger.debug("getTrackListPage, token:", token);
 		logger.info("Page:", page, "activities:", trackList.length, "from:", fromStamp, "to:", toStamp);
+		this.checkAPIInterval();
+		if (this.isRateLimitReached()) {
+			logger.warn(`Stopping activity-list pagination at the configured API call limit (${this.maxTracks})`);
+			return trackList;
+		}
 		try {
+			this.called += 1;
 			const payload = await this.callStravaAPI(token, "athlete/activities", {
 				after: fromStamp,
 				before: toStamp,
 				per_page: 200,
 				page: page
 			});
-			this.called += 1;
 			if (payload && Array.isArray(payload) && payload.length) {
 				trackList.push(...payload);
 				progress?.(`Downloaded ${trackList.length} activities from Strava…`);
@@ -591,6 +596,7 @@ export async function getCurrentAthleteId(accessToken: string): Promise<number |
 }
 
 export const dedupStravaDuplicates = (arr: StravaActivity[]): { filteredList: StravaActivity[]; removalLogs: any[] } => {
+	const shortItems = arr.filter(item => item.elapsed_time < 400);
 	const validItems = arr.filter(item => item.elapsed_time >= 400);
 	const sorted = [...validItems].sort((a, b) => new Date(a.start_date).getTime() - new Date(b.start_date).getTime());
 
@@ -613,7 +619,7 @@ export const dedupStravaDuplicates = (arr: StravaActivity[]): { filteredList: St
 	});
 	if (currentCluster.length > 0) clusters.push(currentCluster);
 
-	const filteredList: StravaActivity[] = [];
+	const filteredList: StravaActivity[] = [...shortItems];
 	const removalLogs: any[] = [];
 
 	clusters.forEach((cluster) => {
