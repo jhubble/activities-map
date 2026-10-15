@@ -79,6 +79,10 @@ export function renderUnifiedForm({
         <h2 class="form-section-title">
           <span>🔍</span> Filtering &amp; Generation Options
         </h2>
+
+        <button type="button" class="btn btn-secondary" onclick="setCurrentYearDefaults()">
+          Set Current Year Defaults
+        </button>
         
         <div class="form-grid">
           ${htmlOptions}

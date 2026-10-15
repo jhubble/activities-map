@@ -28,6 +28,35 @@ function initializeFormState() {
 	form.addEventListener('submit', saveFormData);
 }
 
+function setCurrentYearDefaults() {
+	const form = document.getElementById('myForm');
+	if (!form) return;
+
+	const year = new Date().getFullYear();
+	const values = {
+		fromStamp: `${year}-01-01T00:00:00`,
+		toStamp: '',
+		location_center_lat: '',
+		location_center_long: '',
+		location_distance_lat: '',
+		location_distance_long: '',
+		type: 'Bike_Foot',
+		checkForNewer: 'true',
+		refresh: 'true',
+		dedup: 'true',
+		showHulls: 'true',
+		includePrivate: 'true',
+		tiles: 'osm',
+		tolerance: '0.7'
+	};
+
+	for (const [name, value] of Object.entries(values)) {
+		const field = form.querySelector(`[name="${name}"]`);
+		if (field) field.value = value;
+	}
+	saveFormData();
+}
+
 function restoreFormData(form) {
 	if (!form) {
 		form = document.getElementById('myForm');
@@ -53,3 +82,4 @@ function restoreFormData(form) {
 window.saveFormData = saveFormData;
 window.restoreFormData = restoreFormData;
 window.initializeFormState = initializeFormState;
+window.setCurrentYearDefaults = setCurrentYearDefaults;
