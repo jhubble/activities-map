@@ -130,7 +130,8 @@ export function renderMapHtml({
   long = config.default_longitude,
   tiles = 'osm',
   geoJson = '',
-  rateLimitReached = false
+  rateLimitReached = false,
+  statsUrl = '/stats'
 }: {
   kml?: string;
   lat?: string | number;
@@ -138,6 +139,7 @@ export function renderMapHtml({
   tiles?: string;
   geoJson?: string | null;
   rateLimitReached?: boolean;
+  statsUrl?: string;
 }): string {
   const safeKml = encodeURIComponent(kml);
   const safeGeoJson = geoJson ? encodeURIComponent(geoJson) : '';
@@ -196,7 +198,7 @@ export function renderMapHtml({
     <div id="map-container">
       <div class="nav-bar">
         <a href="/" class="btn btn-secondary">← Back to Options</a>
-        <a href="/stats" class="btn btn-secondary">View Stats</a>
+        <a href="${escapeHtml(statsUrl)}" class="btn btn-secondary">View Stats</a>
       </div>
       ${rateLimitNotice}
       <div id="mapinfo">Loading tracks...</div>

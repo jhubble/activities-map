@@ -308,13 +308,20 @@ app.get('/process', async (request: Request, response: Response) => {
 		}
 
 		let html = `Download tracks: <a href="/${escapeHtml(kmlFileName)}">${escapeHtml(kmlFileName)}</a>`;
+		const statsParams = new URLSearchParams();
+		for (const [key, value] of Object.entries(request.query)) {
+			if (key === 'jobId' || typeof value !== 'string') continue;
+			statsParams.set(key, value);
+		}
+		const statsUrl = `/stats?${statsParams.toString()}`;
 		html += renderMapHtml({
 			kml: kmlFileName,
 			lat,
 			long,
 			tiles: opts.tiles,
 			geoJson: hullGeoJsonFileName,
-			rateLimitReached: data.rateLimitReached
+			rateLimitReached: data.rateLimitReached,
+			statsUrl
 		});
 		response.send(html);
 	} catch (error) {
