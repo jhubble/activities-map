@@ -112,7 +112,7 @@ const processOptions = (options: Record<string, OptionConfig>): string => {
 	return html.join('\n');
 };
 
-const getOptionForm = (token?: string, athleteid?: number | string, refresh: boolean = false): string => {
+const getOptionForm = (token?: string, athleteid?: number | string, refresh: boolean = false, authError?: string): string => {
 	const authUrl = getAuthURL("coderefresh");
 	logger.info("Rendering option form with token:", token ? "(present)" : "(none)");
 	const options: Record<string, OptionConfig> = JSON.parse(JSON.stringify(OPTIONS));
@@ -120,7 +120,23 @@ const getOptionForm = (token?: string, athleteid?: number | string, refresh: boo
 		options.checkForNewer = [false, true];
 	}
 	const htmlOptions = processOptions(options);
-	return renderUnifiedForm({ htmlOptions, authUrl, token, athleteid, refresh });
+	return renderUnifiedForm({ htmlOptions, authUrl, token, athleteid, refresh, authError });
+};
+
+const getAuthErrorMessage = (error: unknown): string => {
+	const responseData = (error as { response?: { data?: { message?: string; errors?: unknown } }; message?: string })?.response?.data;
+	const details = Array.isArray(responseData?.errors)
+		? responseData.errors.map((item: unknown) => {
+			const detail = item as { field?: string; code?: string; resource?: string };
+			return [detail.resource, detail.field, detail.code].filter(Boolean).join(' ');
+		}).filter(Boolean).join('; ')
+		: responseData?.errors && typeof responseData.errors === 'object'
+			? Object.entries(responseData.errors).map(([field, reason]) => `${field}: ${String(reason)}`).join('; ')
+			: '';
+	const stravaMessage = [responseData?.message, details].filter(Boolean).join(' — ');
+	if (stravaMessage) return `Strava rejected the authorization: ${stravaMessage}`;
+	const status = (error as { response?: { status?: number } })?.response?.status;
+	return status ? `Strava token exchange failed (HTTP ${status}). Please reconnect with Strava and try again.` : 'Could not complete Strava authorization. Please reconnect with Strava and try again.';
 };
 
 // default entry point - shows unified main form with integrated auth status
@@ -143,22 +159,23 @@ app.get('/formClient.js', (_req: Request, res: Response) => {
 
 app.get('/code', (request: Request, response: Response) => {
 	const code = request.query?.code as string | undefined;
-	logger.info("Calling /code with code", code);
+	logger.info("Calling /code with authorization code", code ? "(present)" : "(missing)");
 	if (!code) {
 		response.send(getOptionForm());
 	} else {
 		getAuthToken(code).then(({ access_token, athleteID }) => {
 			logger.info("Got token", access_token, "athleteid", athleteID);
 			response.send(getOptionForm(access_token, athleteID ?? undefined));
-		}).catch(() => {
-			response.send(getOptionForm());
+		}).catch((e) => {
+			logger.error("Strava authorization failed", e?.message || e);
+			response.send(getOptionForm(undefined, undefined, false, getAuthErrorMessage(e)));
 		});
 	}
 });
 
 app.get('/coderefresh', (request: Request, response: Response) => {
 	const code = request.query?.code as string | undefined;
-	logger.info("Calling /coderefresh with code", code);
+	logger.info("Calling /coderefresh with authorization code", code ? "(present)" : "(missing)");
 	if (!code) {
 		response.send(getOptionForm());
 	} else {
@@ -166,8 +183,8 @@ app.get('/coderefresh', (request: Request, response: Response) => {
 			logger.info("Got token", access_token, "athleteid", athleteID);
 			response.send(getOptionForm(access_token, athleteID ?? undefined, true));
 		}).catch((e) => {
-			logger.error("error with token", e);
-			response.send(getOptionForm());
+			logger.error("Strava authorization failed", e?.message || e);
+			response.send(getOptionForm(undefined, undefined, false, getAuthErrorMessage(e)));
 		});
 	}
 });

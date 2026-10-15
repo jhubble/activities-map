@@ -7,13 +7,15 @@ export function renderUnifiedForm({
   authUrl,
   token = '',
   athleteid = '',
-  refresh = false
+  refresh = false,
+  authError = ''
 }: {
   htmlOptions: string;
   authUrl: string;
   token?: string;
   athleteid?: number | string;
   refresh?: boolean;
+  authError?: string;
 }): string {
   const hasToken = Boolean(token);
 
@@ -46,6 +48,12 @@ export function renderUnifiedForm({
         <span>📊</span> View Statistics
       </a>
     </nav>
+
+    ${authError ? `
+      <div class="alert alert-error" role="alert">
+        <strong>Strava connection failed:</strong> ${escapeHtml(authError)}
+      </div>
+    ` : ''}
 
     ${!hasToken ? `
       <div class="alert alert-info">

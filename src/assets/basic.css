@@ -243,6 +243,16 @@ select.form-control {
   color: #92400e;
 }
 
+.alert-error {
+  background: #fff0ee;
+  border: 1px solid #f3b2a8;
+  border-left: 4px solid #c93624;
+  color: #76251b;
+  padding: 14px 16px;
+  border-radius: 6px;
+  margin: 16px 0;
+}
+
 /* Existing Tables with modern polish */
 .styled-table {
   border-collapse: separate;
