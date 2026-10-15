@@ -25,7 +25,57 @@ function initializeFormState() {
 			localStorage.setItem('stravaToken', tokenInput.value);
 		}
 	}
-	form.addEventListener('submit', saveFormData);
+	form.addEventListener('submit', (event) => {
+		event.preventDefault();
+		saveFormData();
+		const submitter = event.submitter;
+		const action = submitter?.formAction || form.action;
+		const formData = new FormData(form);
+		const params = new URLSearchParams(formData);
+		const jobId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+		params.set('jobId', jobId);
+		showProcessingStatus('Starting…');
+		const statusTimer = window.setInterval(async () => {
+			try {
+				const statusResponse = await fetch(`/progress/${encodeURIComponent(jobId)}`, { cache: 'no-store' });
+				if (statusResponse.ok) {
+					const status = await statusResponse.json();
+					showProcessingStatus(status.message);
+				}
+			} catch (_error) {
+				showProcessingStatus('Still working…');
+			}
+		}, 700);
+		fetch(`${action}?${params.toString()}`)
+			.then(async (response) => {
+				if (!response.ok) throw new Error(`Request failed (${response.status})`);
+				return response.text();
+			})
+			.then((html) => {
+				window.clearInterval(statusTimer);
+				document.open();
+				document.write(html);
+				document.close();
+			})
+			.catch((error) => {
+				window.clearInterval(statusTimer);
+				showProcessingStatus(`Unable to finish: ${error.message}. Please try again.`);
+			});
+	});
+}
+
+function showProcessingStatus(message) {
+	let panel = document.getElementById('processingStatus');
+	if (!panel) {
+		panel = document.createElement('div');
+		panel.id = 'processingStatus';
+		panel.className = 'processing-status';
+		panel.setAttribute('role', 'status');
+		panel.setAttribute('aria-live', 'polite');
+		panel.innerHTML = '<span class="processing-spinner" aria-hidden="true"></span><span class="processing-message"></span>';
+		document.body.appendChild(panel);
+	}
+	panel.querySelector('.processing-message').textContent = message;
 }
 
 function setCurrentYearDefaults() {
@@ -135,3 +185,4 @@ window.initializeFormState = initializeFormState;
 window.setCurrentYearDefaults = setCurrentYearDefaults;
 window.setNearSeattle = setNearSeattle;
 window.setNearMe = setNearMe;
+window.showProcessingStatus = showProcessingStatus;

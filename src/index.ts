@@ -18,6 +18,14 @@ const port = config.run_on_port || 8080;
 const foot = config.activity_types.Foot || []; // Run, Walk, Hike
 const __dirname = packageDirectorySync() || process.cwd();
 const outDir = path.resolve(__dirname, 'out');
+const jobProgress = new Map<string, string>();
+app.use((request: Request, response: Response, next) => {
+	response.on('finish', () => {
+		const jobId = typeof request.query.jobId === 'string' ? request.query.jobId : undefined;
+		if (jobId) jobProgress.delete(jobId);
+	});
+	next();
+});
 
 logger.trace("dirname:", __dirname);
 
@@ -230,7 +238,8 @@ const _getInitialData = async (request: Request, response: Response): Promise<In
 	const lat = opts.location_center_lat || config.default_latitude;
 	const long = opts.location_center_long || config.default_longitude;
 	logger.debug("options: ", opts);
-	const data = await defaultStravaService.getStuff(opts);
+	const jobId = typeof request.query.jobId === 'string' ? request.query.jobId : undefined;
+	const data = await defaultStravaService.getStuff(opts, jobId ? (message) => jobProgress.set(jobId, message) : undefined);
 	logger.trace("DATA", data);
 	if (!data) {
 		response.send('No data found <a href="javascript:history.back()">go back</a>');
@@ -239,6 +248,11 @@ const _getInitialData = async (request: Request, response: Response): Promise<In
 		return { data, opts, lat, long };
 	}
 };
+
+app.get('/progress/:jobId', (request: Request, response: Response) => {
+	const jobId = String(request.params.jobId || '');
+	response.json({ message: jobProgress.get(jobId) || 'Starting…' });
+});
 
 // process will take options from query string
 app.get('/process', async (request: Request, response: Response) => {
@@ -251,6 +265,8 @@ app.get('/process', async (request: Request, response: Response) => {
 		const activities = data.activities;
 		const showHulls = opts?.showHulls === 'true';
 		const fileList = activities.map(activity => defaultStravaService.getCacheFileFromActivity(activity));
+		const jobId = typeof request.query.jobId === 'string' ? request.query.jobId : undefined;
+		if (jobId) jobProgress.set(jobId, showHulls ? 'Calculating activity hulls and spatial relationships…' : 'Preparing the map and track files…');
 		const hulls = showHulls ? getSpatialAnalysis(fileList, 0.11, tolerance) : null;
 		const hullsGeoJson = hulls?.geoJSON;
 		const kmlTrack = data.kmlTrack;
@@ -265,6 +281,7 @@ app.get('/process', async (request: Request, response: Response) => {
 			const hullGeoJsonFullPath = hullGeoJsonFileName ? path.join(outDir, hullGeoJsonFileName) : null;
 			const tracksFullPath = path.join(outDir, kmlFileName);
 
+			if (jobId) jobProgress.set(jobId, 'Writing map and GeoJSON files…');
 			await outputFile(kmlTrack, tracksFullPath);
 			if (hullsGeoJson && hullGeoJsonFullPath) {
 				await outputFile(JSON.stringify(hullsGeoJson, null, 2), hullGeoJsonFullPath);
@@ -280,6 +297,7 @@ app.get('/process', async (request: Request, response: Response) => {
 				rateLimitReached: data.rateLimitReached
 			});
 			response.send(html);
+			if (jobId) jobProgress.delete(jobId);
 		}
 	}
 });
@@ -317,6 +335,8 @@ app.get('/stats', async (request: Request, response: Response) => {
 	const dayBuckets: Record<string, BucketStats> = {};
 
 	if (result) {
+		const jobId = typeof request.query.jobId === 'string' ? request.query.jobId : undefined;
+		if (jobId) jobProgress.set(jobId, 'Calculating statistics and building the activity table…');
 		const { data } = result;
 		const { activities, activityProcessCounts } = data;
 		let elapsed = 0;
@@ -398,6 +418,7 @@ app.get('/stats', async (request: Request, response: Response) => {
 		}, getDaysInMonth, metersToMiles);
 
 		response.send(html);
+		if (jobId) jobProgress.delete(jobId);
 	}
 });
 

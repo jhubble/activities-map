@@ -201,6 +201,8 @@ export function renderMapHtml({
       layers.forEach(layerFile => {
         if (layerFile && layerFile !== 'null') {
           const colorToUse = colors[color] || 'blue';
+          const layerLabel = layerFile.indexOf('hull_') === 0 ? 'hull data' : 'track data';
+          document.getElementById('mapinfo').textContent = 'Reading ' + layerLabel + ' from file…';
           color++;
           fetch('/geojson/' + layerFile).then(function (response) {
             return response.json();
@@ -249,6 +251,7 @@ export function renderMapHtml({
             }).addTo(map);
           }).catch(function (error) {
             console.error("Error loading geojson layer:", error);
+            document.getElementById('mapinfo').textContent = 'Unable to read map data: ' + error.message;
           });
         }
       });
