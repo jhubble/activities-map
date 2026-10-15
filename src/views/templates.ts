@@ -83,6 +83,13 @@ export function renderUnifiedForm({
         <button type="button" class="btn btn-secondary" onclick="setCurrentYearDefaults()">
           Set Current Year Defaults
         </button>
+        <button type="button" class="btn btn-secondary" onclick="setNearSeattle()">
+          Near Seattle
+        </button>
+        <button type="button" class="btn btn-secondary" onclick="setNearMe()">
+          Near me
+        </button>
+        <span id="locationStatus" role="status" aria-live="polite"></span>
         
         <div class="form-grid">
           ${htmlOptions}
