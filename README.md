@@ -7,7 +7,7 @@ Show activities from Strava (or others...) on a map
 
     npm install
 
-2. To use with Strava, set up a [Strava App](https://developers.strava.com/docs/getting-started/#account). 
+2. To use with Strava, set up a [Strava App](https://developers.strava.com/docs/getting-started/#account).  Note: recently Strava has required you to be a member to access the API
 
 3. Copy the configuration from [https://www.strava.com/settings/api](https://www.strava.com/settings/api)
 
@@ -43,6 +43,12 @@ The kml can also be imported to [Google my maps](https://www.google.com/mymaps).
 Google allows a maximum of 2.5 MB for kml size. Hoewver, you can add multiple.
 This allows you to browse google maps and see where you have gone, as well as click on a track to see the name and date.
 
+Convex hulls may optionally be generated for your activities. This will identify the total area of interconnected activities chosen.
+
+## Statistics
+
+The statistics view summarizes activities for the time range as well as showing monthly and daily statistics. It also includes a section of items that only have gear matching certain values. (I use generic values as my default and have them hardcoded.)
+
 ## Background
 
 I wanted to have a portable map available of where I've been. Some existing solutions helped, but I wanted to have something fully local.
@@ -54,3 +60,6 @@ Strava requires a premium membership for heatmaps. There is no ability to export
 This is a great tool. I had used it to generate maps.
 However, it had some trouble with kml export. I worked around it by copying the internal map structure and generating kml. However, it is also subject to API limits.
 
+[CityStrides](https://citystrides.com) - encourages you to run every street. It provides a map of everywhere you have covered on foot. With the paid version, it will also generate "Territories" of every place you have been on foot.
+
+[Wandrer](https://wandrer.earth) - tracks biking and walking everywhere. To store your entire history, you must be a paid member.

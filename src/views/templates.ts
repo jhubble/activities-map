@@ -7,13 +7,15 @@ export function renderUnifiedForm({
   authUrl,
   token = '',
   athleteid = '',
-  refresh = false
+  refresh = false,
+  authError = ''
 }: {
   htmlOptions: string;
   authUrl: string;
   token?: string;
   athleteid?: number | string;
   refresh?: boolean;
+  authError?: string;
 }): string {
   const hasToken = Boolean(token);
 
@@ -39,13 +41,13 @@ export function renderUnifiedForm({
       <a class="quick-nav-link primary" id="refresh" onclick="saveFormData()" href="${escapeHtml(authUrl)}">
         <span>⚡</span> ${hasToken ? 'Re-authenticate with Strava' : 'Connect with Strava'}
       </a>
-      <a class="quick-nav-link" href="/map">
-        <span>📍</span> View Current Map
-      </a>
-      <a class="quick-nav-link" href="/stats">
-        <span>📊</span> View Statistics
-      </a>
     </nav>
+
+    ${authError ? `
+      <div class="alert alert-error" role="alert">
+        <strong>Strava connection failed:</strong> ${escapeHtml(authError)}
+      </div>
+    ` : ''}
 
     ${!hasToken ? `
       <div class="alert alert-info">
@@ -79,13 +81,24 @@ export function renderUnifiedForm({
         <h2 class="form-section-title">
           <span>🔍</span> Filtering &amp; Generation Options
         </h2>
+
+        <button type="button" class="btn btn-secondary" onclick="setCurrentYearDefaults()">
+          Set Current Year Defaults
+        </button>
+        <button type="button" class="btn btn-secondary" onclick="setNearSeattle()">
+          Near Seattle
+        </button>
+        <button type="button" class="btn btn-secondary" onclick="setNearMe()">
+          Near me
+        </button>
+        <span id="locationStatus" role="status" aria-live="polite"></span>
         
         <div class="form-grid">
           ${htmlOptions}
         </div>
 
         <div class="actions-bar">
-          <button type="submit" class="btn btn-primary">
+          <button type="submit" formaction="/process" class="btn btn-primary">
             <span>🗺️</span> Generate Map
           </button>
           <button type="submit" formaction="/stats" class="btn btn-secondary">
@@ -101,7 +114,12 @@ export function renderUnifiedForm({
   </div>
 
   <script src="/formClient.js"></script>
-  ${refresh ? '<script>restoreFormData()</script>' : ''}
+  <script>initializeFormState()</script>
+  <script>
+    if (location.pathname === '/code' || location.pathname === '/coderefresh') {
+      history.replaceState(null, '', '/');
+    }
+  </script>
 </body>
 </html>`;
 }
@@ -112,7 +130,8 @@ export function renderMapHtml({
   long = config.default_longitude,
   tiles = 'osm',
   geoJson = '',
-  rateLimitReached = false
+  rateLimitReached = false,
+  statsUrl = '/stats'
 }: {
   kml?: string;
   lat?: string | number;
@@ -120,9 +139,14 @@ export function renderMapHtml({
   tiles?: string;
   geoJson?: string | null;
   rateLimitReached?: boolean;
+  statsUrl?: string;
 }): string {
   const safeKml = encodeURIComponent(kml);
   const safeGeoJson = geoJson ? encodeURIComponent(geoJson) : '';
+  const serializedLayers = JSON.stringify([safeKml, safeGeoJson])
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026');
   const rateLimitNotice = rateLimitReached
     ? `<div class="alert alert-warning" style="margin: 16px;">
         <strong>Notice:</strong> Strava 15-minute API rate limit reached. Downloaded tracks were cached. Re-run after 15 minutes to continue downloading additional tracks.
@@ -174,14 +198,14 @@ export function renderMapHtml({
     <div id="map-container">
       <div class="nav-bar">
         <a href="/" class="btn btn-secondary">← Back to Options</a>
-        <a href="/stats" class="btn btn-secondary">View Stats</a>
+        <a href="${escapeHtml(statsUrl)}" class="btn btn-secondary">View Stats</a>
       </div>
       ${rateLimitNotice}
       <div id="mapinfo">Loading tracks...</div>
       <div id="map"></div>
     </div>
     <script>
-      const layers = [ '${safeKml}', '${safeGeoJson}' ];
+      const layers = ${serializedLayers};
       var map = L.map('map').setView([${Number(lat)}, ${Number(long)}], 13);
       ${tiles === 'osm' ? osmTiles : ''}
 
@@ -190,6 +214,8 @@ export function renderMapHtml({
       layers.forEach(layerFile => {
         if (layerFile && layerFile !== 'null') {
           const colorToUse = colors[color] || 'blue';
+          const layerLabel = layerFile.indexOf('hull_') === 0 ? 'hull data' : 'track data';
+          document.getElementById('mapinfo').textContent = 'Reading ' + layerLabel + ' from file…';
           color++;
           fetch('/geojson/' + layerFile).then(function (response) {
             return response.json();
@@ -238,6 +264,7 @@ export function renderMapHtml({
             }).addTo(map);
           }).catch(function (error) {
             console.error("Error loading geojson layer:", error);
+            document.getElementById('mapinfo').textContent = 'Unable to read map data: ' + error.message;
           });
         }
       });

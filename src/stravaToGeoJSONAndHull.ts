@@ -35,19 +35,22 @@ interface GroupData {
  * and automated relational tracking output logs.
  * Uses RBush spatial index for fast intersection testing.
  */
-export function getSpatialAnalysis(
+export async function getSpatialAnalysis(
     fileList: string[],
     intersectionFudgeMeters: number = 10,
-    simplifyTolerance: number = 0.0003
-): SpatialAnalysisResult | null {
+    simplifyTolerance: number = 0.0003,
+    progress?: (message: string) => void
+): Promise<SpatialAnalysisResult | null> {
     console.log(`\n🚀 Processing ${fileList.length} files...`);
+    progress?.(`Spatial analysis starting for ${fileList.length} track files…`);
+    await new Promise<void>(resolve => setImmediate(resolve));
     console.time("⏱️ Total Execution Time");
 
     const fudgeKm = intersectionFudgeMeters / 1000;
     const items: TrackItem[] = [];
 
     // 1. Ingest, Simplify, and Calculate Track Lengths
-    fileList.forEach((filePath, index) => {
+    for (const [index, filePath] of fileList.entries()) {
         try {
             const rawData = JSON.parse(fs.readFileSync(filePath, 'utf8'));
             let coords: GeoJSON.Position[] = [];
@@ -64,14 +67,14 @@ export function getSpatialAnalysis(
                 });
             }
 
-            if (coords.length < 2) return;
+            if (coords.length < 2) continue;
 
             const rawLine = turf.lineString(coords);
             const trackMiles = turf.length(rawLine, { units: 'miles' });
             const simplified = turf.simplify(rawLine, { tolerance: simplifyTolerance, highQuality: false });
             const collisionPoly = turf.buffer(simplified, fudgeKm, { units: 'kilometers' }) as GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon> | undefined;
 
-            if (!collisionPoly) return;
+            if (!collisionPoly) continue;
 
             items.push({
                 id: items.length,
@@ -81,13 +84,19 @@ export function getSpatialAnalysis(
                 bbox: turf.bbox(collisionPoly)
             });
 
-            if ((index + 1) % 100 === 0) console.log(`  📂 Loaded ${index + 1} files...`);
+            if ((index + 1) % 100 === 0) {
+                console.log(`  📂 Loaded ${index + 1} files...`);
+                progress?.(`Spatial analysis: loaded ${index + 1} of ${fileList.length} files…`);
+                await new Promise<void>(resolve => setImmediate(resolve));
+            }
         } catch (err: any) {
             console.error(`  ❌ Error parsing file:`, err.message);
         }
-    });
+    }
 
     const N = items.length;
+    progress?.(`Spatial analysis: loaded ${fileList.length} files; analyzing ${N} tracks…`);
+    await new Promise<void>(resolve => setImmediate(resolve));
     if (N === 0) return null;
 
     // 2. Union-Find Setup
@@ -114,6 +123,8 @@ export function getSpatialAnalysis(
 
     // 3. Process Intersections using RBush Spatial Index
     console.log(`🔍 Mapping spatial intersections with RBush spatial index...`);
+    progress?.(`Spatial analysis: mapping track intersections…`);
+    await new Promise<void>(resolve => setImmediate(resolve));
     const tree = new RBush<RBushItem>();
     const treeItems: RBushItem[] = items.map(item => ({
         minX: item.bbox[0],
@@ -125,6 +136,10 @@ export function getSpatialAnalysis(
     tree.load(treeItems);
 
     for (let i = 0; i < N; i++) {
+        if (i > 0 && i % 100 === 0) {
+            progress?.(`Spatial analysis: checking intersections for track ${i + 1} of ${N}…`);
+            await new Promise<void>(resolve => setImmediate(resolve));
+        }
         const itemA = items[i];
         const bboxA = itemA.bbox;
 
@@ -151,6 +166,8 @@ export function getSpatialAnalysis(
 
     // 4. Aggregate Points, Track Mileage, and Track Counts
     console.log(`🧩 Aggregating data into clusters...`);
+    progress?.(`Spatial analysis: aggregating connected track clusters…`);
+    await new Promise<void>(resolve => setImmediate(resolve));
     const groupMap = new Map<number, GroupData>();
     for (let i = 0; i < N; i++) {
         const root = find(i);
@@ -165,6 +182,8 @@ export function getSpatialAnalysis(
 
     // 5. Generate Initial Hulls
     console.log(`📐 Constructing base hulls...`);
+    progress?.(`Spatial analysis: constructing area hulls…`);
+    await new Promise<void>(resolve => setImmediate(resolve));
     let tempHulls: Array<GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon> & { bbox?: GeoJSON.BBox }> = [];
     let idx = 1;
 
@@ -193,6 +212,8 @@ export function getSpatialAnalysis(
 
     // 6. Cross-Hull Relationship Identification
     console.log(`📡 Analyzing relationships between hulls...`);
+    progress?.(`Spatial analysis: analyzing relationships between hulls…`);
+    await new Promise<void>(resolve => setImmediate(resolve));
     const relationshipLog: string[] = [];
 
     for (let i = 0; i < tempHulls.length; i++) {
@@ -267,6 +288,7 @@ export function getSpatialAnalysis(
 
     console.timeEnd("⏱️ Total Execution Time");
     console.log(`✨ Success! Output contains ${finalFeatures.length} structured hulls.`);
+    progress?.(`Spatial analysis complete: ${finalFeatures.length} area hulls generated.`);
 
     // Print the requested intersection/containment relationship log to the console
     if (relationshipLog.length > 0) {

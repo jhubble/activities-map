@@ -18,6 +18,14 @@ const port = config.run_on_port || 8080;
 const foot = config.activity_types.Foot || []; // Run, Walk, Hike
 const __dirname = packageDirectorySync() || process.cwd();
 const outDir = path.resolve(__dirname, 'out');
+const jobProgress = new Map<string, string>();
+app.use((request: Request, response: Response, next) => {
+	response.on('finish', () => {
+		const jobId = typeof request.query.jobId === 'string' ? request.query.jobId : undefined;
+		if (jobId) jobProgress.delete(jobId);
+	});
+	next();
+});
 
 logger.trace("dirname:", __dirname);
 
@@ -45,7 +53,7 @@ const OPTIONS: Record<string, OptionConfig> = {
 	checkForNewer: [true, false],
 	includePrivate: [false, true],
 	refresh: { values: [false, true], note: 'Re-read all metadata and reload those that are changed' },
-	fromStamp: { default: '2024-01-15', note: "time parsable by JS in locale or unix timestamp (1694822400 is 2023-09-16)" },
+	fromStamp: { default: `${new Date().getFullYear()}-01-01`, note: "time parsable by JS in locale or unix timestamp (1694822400 is 2023-09-16)" },
 	toStamp: '',
 	center_lat: { name: "Center Latitude", key: "location_center_lat", default: config.default_latitude },
 	center_lng: { name: "Center Longitude", key: "location_center_long", default: config.default_longitude },
@@ -104,7 +112,7 @@ const processOptions = (options: Record<string, OptionConfig>): string => {
 	return html.join('\n');
 };
 
-const getOptionForm = (token?: string, athleteid?: number | string, refresh: boolean = false): string => {
+const getOptionForm = (token?: string, athleteid?: number | string, refresh: boolean = false, authError?: string): string => {
 	const authUrl = getAuthURL("coderefresh");
 	logger.info("Rendering option form with token:", token ? "(present)" : "(none)");
 	const options: Record<string, OptionConfig> = JSON.parse(JSON.stringify(OPTIONS));
@@ -112,7 +120,23 @@ const getOptionForm = (token?: string, athleteid?: number | string, refresh: boo
 		options.checkForNewer = [false, true];
 	}
 	const htmlOptions = processOptions(options);
-	return renderUnifiedForm({ htmlOptions, authUrl, token, athleteid, refresh });
+	return renderUnifiedForm({ htmlOptions, authUrl, token, athleteid, refresh, authError });
+};
+
+const getAuthErrorMessage = (error: unknown): string => {
+	const responseData = (error as { response?: { data?: { message?: string; errors?: unknown } }; message?: string })?.response?.data;
+	const details = Array.isArray(responseData?.errors)
+		? responseData.errors.map((item: unknown) => {
+			const detail = item as { field?: string; code?: string; resource?: string };
+			return [detail.resource, detail.field, detail.code].filter(Boolean).join(' ');
+		}).filter(Boolean).join('; ')
+		: responseData?.errors && typeof responseData.errors === 'object'
+			? Object.entries(responseData.errors).map(([field, reason]) => `${field}: ${String(reason)}`).join('; ')
+			: '';
+	const stravaMessage = [responseData?.message, details].filter(Boolean).join(' — ');
+	if (stravaMessage) return `Strava rejected the authorization: ${stravaMessage}`;
+	const status = (error as { response?: { status?: number } })?.response?.status;
+	return status ? `Strava token exchange failed (HTTP ${status}). Please reconnect with Strava and try again.` : 'Could not complete Strava authorization. Please reconnect with Strava and try again.';
 };
 
 // default entry point - shows unified main form with integrated auth status
@@ -124,27 +148,34 @@ app.get('/', (request: Request, response: Response) => {
 
 app.get('/formClient.js', (_req: Request, res: Response) => {
 	logger.info("serving form client");
-	res.sendFile(path.join(__dirname, 'src/formClient.js'));
+	// TypeScript builds the browser client into dist, while `npm start` serves
+	// the plain JavaScript source directly.
+	const sourceClient = path.join(__dirname, 'src/formClient.js');
+	const builtClient = path.join(__dirname, 'dist/formClient.js');
+	// Prefer the source client so a stale build cannot silently omit form
+	// persistence changes when running the app from the repository.
+	res.sendFile(fs.existsSync(sourceClient) ? sourceClient : builtClient);
 });
 
 app.get('/code', (request: Request, response: Response) => {
 	const code = request.query?.code as string | undefined;
-	logger.info("Calling /code with code", code);
+	logger.info("Calling /code with authorization code", code ? "(present)" : "(missing)");
 	if (!code) {
 		response.send(getOptionForm());
 	} else {
 		getAuthToken(code).then(({ access_token, athleteID }) => {
 			logger.info("Got token", access_token, "athleteid", athleteID);
 			response.send(getOptionForm(access_token, athleteID ?? undefined));
-		}).catch(() => {
-			response.send(getOptionForm());
+		}).catch((e) => {
+			logger.error("Strava authorization failed", e?.message || e);
+			response.send(getOptionForm(undefined, undefined, false, getAuthErrorMessage(e)));
 		});
 	}
 });
 
 app.get('/coderefresh', (request: Request, response: Response) => {
 	const code = request.query?.code as string | undefined;
-	logger.info("Calling /coderefresh with code", code);
+	logger.info("Calling /coderefresh with authorization code", code ? "(present)" : "(missing)");
 	if (!code) {
 		response.send(getOptionForm());
 	} else {
@@ -152,8 +183,8 @@ app.get('/coderefresh', (request: Request, response: Response) => {
 			logger.info("Got token", access_token, "athleteid", athleteID);
 			response.send(getOptionForm(access_token, athleteID ?? undefined, true));
 		}).catch((e) => {
-			logger.error("error with token", e);
-			response.send(getOptionForm());
+			logger.error("Strava authorization failed", e?.message || e);
+			response.send(getOptionForm(undefined, undefined, false, getAuthErrorMessage(e)));
 		});
 	}
 });
@@ -224,7 +255,8 @@ const _getInitialData = async (request: Request, response: Response): Promise<In
 	const lat = opts.location_center_lat || config.default_latitude;
 	const long = opts.location_center_long || config.default_longitude;
 	logger.debug("options: ", opts);
-	const data = await defaultStravaService.getStuff(opts);
+	const jobId = typeof request.query.jobId === 'string' ? request.query.jobId : undefined;
+	const data = await defaultStravaService.getStuff(opts, jobId ? (message) => jobProgress.set(jobId, message) : undefined);
 	logger.trace("DATA", data);
 	if (!data) {
 		response.send('No data found <a href="javascript:history.back()">go back</a>');
@@ -234,10 +266,18 @@ const _getInitialData = async (request: Request, response: Response): Promise<In
 	}
 };
 
+app.get('/progress/:jobId', (request: Request, response: Response) => {
+	const jobId = String(request.params.jobId || '');
+	response.json({ message: jobProgress.get(jobId) || 'Starting…' });
+});
+
 // process will take options from query string
 app.get('/process', async (request: Request, response: Response) => {
-	const result = await _getInitialData(request, response);
-	if (result) {
+	const jobId = typeof request.query.jobId === 'string' ? request.query.jobId : undefined;
+	logger.info("Generating map", jobId ? `job ${jobId}` : "without job id");
+	try {
+		const result = await _getInitialData(request, response);
+		if (!result) return;
 		const { data, opts, lat, long } = result;
 		const tolerance = opts.tolerance ? opts.tolerance / 10000 : 0.00006;
 		logger.info("TOLERANCE", opts.tolerance, " - adjusted value used:", tolerance);
@@ -245,36 +285,52 @@ app.get('/process', async (request: Request, response: Response) => {
 		const activities = data.activities;
 		const showHulls = opts?.showHulls === 'true';
 		const fileList = activities.map(activity => defaultStravaService.getCacheFileFromActivity(activity));
-		const hulls = showHulls ? getSpatialAnalysis(fileList, 0.11, tolerance) : null;
+		if (jobId) jobProgress.set(jobId, showHulls ? 'Calculating activity hulls and spatial relationships…' : 'Preparing the map and track files…');
+		const hulls = showHulls ? await getSpatialAnalysis(fileList, 0.11, tolerance, jobId ? (message) => jobProgress.set(jobId, message) : undefined) : null;
 		const hullsGeoJson = hulls?.geoJSON;
 		const kmlTrack = data.kmlTrack;
 
 		if (!kmlTrack) {
-			response.send('No data found <a href="javascript:history.back()">go back</a>');
-		} else {
-			const outputDate = `output_${Date.now()}`;
-			const kmlFileName = `${outputDate}.kml`;
-			const hullGeoJsonFileName = showHulls ? `hull_${outputDate}.geojson` : null;
-
-			const hullGeoJsonFullPath = hullGeoJsonFileName ? path.join(outDir, hullGeoJsonFileName) : null;
-			const tracksFullPath = path.join(outDir, kmlFileName);
-
-			await outputFile(kmlTrack, tracksFullPath);
-			if (hullsGeoJson && hullGeoJsonFullPath) {
-				await outputFile(JSON.stringify(hullsGeoJson, null, 2), hullGeoJsonFullPath);
-			}
-
-			let html = `Download tracks: <a href="/${escapeHtml(kmlFileName)}">${escapeHtml(kmlFileName)}</a>`;
-			html += renderMapHtml({
-				kml: kmlFileName,
-				lat: lat,
-				long: long,
-				tiles: opts.tiles,
-				geoJson: hullGeoJsonFileName,
-				rateLimitReached: data.rateLimitReached
-			});
-			response.send(html);
+			response.send('No track data was produced. <a href="javascript:history.back()">Go back</a>');
+			return;
 		}
+
+		const outputDate = `output_${Date.now()}`;
+		const kmlFileName = `${outputDate}.kml`;
+		const hullGeoJsonFileName = showHulls ? `hull_${outputDate}.geojson` : null;
+		const hullGeoJsonFullPath = hullGeoJsonFileName ? path.join(outDir, hullGeoJsonFileName) : null;
+		const tracksFullPath = path.join(outDir, kmlFileName);
+
+		if (jobId) jobProgress.set(jobId, 'Writing map and GeoJSON files…');
+		await outputFile(kmlTrack, tracksFullPath);
+		if (hullsGeoJson && hullGeoJsonFullPath) {
+			await outputFile(JSON.stringify(hullsGeoJson, null, 2), hullGeoJsonFullPath);
+		}
+
+		let html = `Download tracks: <a href="/${escapeHtml(kmlFileName)}">${escapeHtml(kmlFileName)}</a>`;
+		const statsParams = new URLSearchParams();
+		for (const [key, value] of Object.entries(request.query)) {
+			if (key === 'jobId' || typeof value !== 'string') continue;
+			statsParams.set(key, value);
+		}
+		const statsUrl = `/stats?${statsParams.toString()}`;
+		html += renderMapHtml({
+			kml: kmlFileName,
+			lat,
+			long,
+			tiles: opts.tiles,
+			geoJson: hullGeoJsonFileName,
+			rateLimitReached: data.rateLimitReached,
+			statsUrl
+		});
+		response.send(html);
+	} catch (error) {
+		logger.error("Map generation failed", error);
+		if (!response.headersSent) {
+			response.status(500).send(`<h1>Map generation failed</h1><p>${escapeHtml(error instanceof Error ? error.message : String(error))}</p><p><a href="javascript:history.back()">Go back</a></p>`);
+		}
+	} finally {
+		if (jobId) jobProgress.delete(jobId);
 	}
 });
 
@@ -311,6 +367,8 @@ app.get('/stats', async (request: Request, response: Response) => {
 	const dayBuckets: Record<string, BucketStats> = {};
 
 	if (result) {
+		const jobId = typeof request.query.jobId === 'string' ? request.query.jobId : undefined;
+		if (jobId) jobProgress.set(jobId, 'Calculating statistics and building the activity table…');
 		const { data } = result;
 		const { activities, activityProcessCounts } = data;
 		let elapsed = 0;
@@ -392,6 +450,7 @@ app.get('/stats', async (request: Request, response: Response) => {
 		}, getDaysInMonth, metersToMiles);
 
 		response.send(html);
+		if (jobId) jobProgress.delete(jobId);
 	}
 });
 

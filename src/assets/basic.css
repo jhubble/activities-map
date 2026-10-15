@@ -243,6 +243,16 @@ select.form-control {
   color: #92400e;
 }
 
+.alert-error {
+  background: #fff0ee;
+  border: 1px solid #f3b2a8;
+  border-left: 4px solid #c93624;
+  color: #76251b;
+  padding: 14px 16px;
+  border-radius: 6px;
+  margin: 16px 0;
+}
+
 /* Existing Tables with modern polish */
 .styled-table {
   border-collapse: separate;
@@ -296,4 +306,40 @@ select.form-control {
 .styled-table tbody tr.removed-items td {
   background-color: #fef3c7;
   color: #92400e;
+}
+
+.processing-status {
+  position: fixed;
+  z-index: 2000;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: calc(100vw - 32px);
+  padding: 14px 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card-bg);
+  box-shadow: var(--shadow-lg);
+  font-weight: 600;
+}
+
+.processing-spinner {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  border: 3px solid var(--border);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: processing-spin 0.8s linear infinite;
+}
+
+@keyframes processing-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .processing-spinner { animation-duration: 2s; }
 }

@@ -102,32 +102,41 @@ export class StravaService {
 		page = 1,
 		trackList = [],
 		fromStamp = 0,
-		toStamp = Math.ceil(Date.now() / 1000)
+		toStamp = Math.ceil(Date.now() / 1000),
+		progress
 	}: {
 		token?: string;
 		page?: number;
 		trackList?: StravaActivity[];
 		fromStamp?: number;
 		toStamp?: number;
+		progress?: (message: string) => void;
 	} = {}): Promise<StravaActivity[]> {
 		logger.debug("getTrackListPage, token:", token);
 		logger.info("Page:", page, "activities:", trackList.length, "from:", fromStamp, "to:", toStamp);
+		this.checkAPIInterval();
+		if (this.isRateLimitReached()) {
+			logger.warn(`Stopping activity-list pagination at the configured API call limit (${this.maxTracks})`);
+			return trackList;
+		}
 		try {
+			this.called += 1;
 			const payload = await this.callStravaAPI(token, "athlete/activities", {
 				after: fromStamp,
 				before: toStamp,
 				per_page: 200,
 				page: page
 			});
-			this.called += 1;
 			if (payload && Array.isArray(payload) && payload.length) {
 				trackList.push(...payload);
+				progress?.(`Downloaded ${trackList.length} activities from Strava…`);
 				trackList = await this.getTrackListPage({
 					page: page + 1,
 					trackList: trackList,
 					fromStamp: fromStamp,
 					toStamp: toStamp,
-					token: token
+					token: token,
+					progress
 				});
 			}
 		} catch (e) {
@@ -140,7 +149,8 @@ export class StravaService {
 		activity: StravaActivity,
 		token?: string,
 		force: boolean = false,
-		tolerance: number = this.tolerance
+		tolerance: number = this.tolerance,
+		progress?: (message: string) => void
 	): Promise<string> {
 		logger.trace("Activity:", activity);
 		this.checkAPIInterval();
@@ -152,6 +162,7 @@ export class StravaService {
 
 		if (!force && fs.existsSync(trackCacheFile)) {
 			logger.debug("Reading cache file", trackCacheFile);
+			progress?.(`Reading cached track for ${activity.name}…`);
 			try {
 				const fileData = await readFile(trackCacheFile, 'utf8');
 				stream = JSON.parse(fileData);
@@ -168,6 +179,7 @@ export class StravaService {
 				this.skipped++;
 				logger.warn(`Not downloading ${id} (${activity.name}) because no start_latlng`);
 			} else {
+				progress?.(`Downloading GPS data for ${activity.name}…`);
 				this.called++;
 				logger.debug(`API Calls made: ${this.called}`);
 				try {
@@ -225,7 +237,8 @@ export class StravaService {
 		tolerance,
 		refresh = false,
 		dedup = false
-	}: GetStuffOptions = {}): Promise<GetStuffResult | undefined> {
+	}: GetStuffOptions = {}, progress?: (message: string) => void): Promise<GetStuffResult | undefined> {
+		progress?.('Preparing cache directories…');
 		await this.ensureDirectories();
 		this.checkAPIInterval();
 		let noDataTracks = 0;
@@ -256,6 +269,7 @@ export class StravaService {
 
 			if (fs.existsSync(cacheListFile)) {
 				try {
+					progress?.('Reading the saved activity list…');
 					const data = await readFile(cacheListFile, 'utf8');
 					payload = JSON.parse(data);
 				} catch (e) {
@@ -265,6 +279,7 @@ export class StravaService {
 
 			if (refresh && refresh !== 'false') {
 				logger.info("Refreshing activities from time range");
+				progress?.('Downloading the activity list from Strava…');
 				const payloadMap: Record<number, number> = {};
 				payload.forEach((el, index) => {
 					payloadMap[el.id] = index;
@@ -272,7 +287,7 @@ export class StravaService {
 
 				const endTime = (typeof toStamp === 'number' ? toStamp : Number(toStamp)) || Date.now() / 1000;
 				const startTime = (typeof fromStamp === 'number' ? fromStamp : Number(fromStamp)) || 0;
-				const newPayload = await this.getTrackListPage({ token, fromStamp: startTime, toStamp: endTime });
+				const newPayload = await this.getTrackListPage({ token, fromStamp: startTime, toStamp: endTime, progress });
 
 				for (let i = 0; i < newPayload.length; i++) {
 					const activity = newPayload[i];
@@ -283,13 +298,13 @@ export class StravaService {
 						if (this.compareTrackMetaData(oldActivity, activity)) {
 							logger.info(`Updating metadata & redownloading activity ${id}`);
 							payload[oldIndex] = activity;
-							await this.processActivity(activity, token, true, effectiveTolerance ?? undefined);
+							await this.processActivity(activity, token, true, effectiveTolerance ?? undefined, progress);
 						}
 					} else {
 						logger.info(`Activity "${id}" does not exist in cache. Downloading and adding.`);
 						payload.push(activity);
 						try {
-							const full = await this.processActivity(activity, token, true, effectiveTolerance ?? undefined);
+							const full = await this.processActivity(activity, token, true, effectiveTolerance ?? undefined, progress);
 							if (full === 'NO DATA') {
 								noDataTracks++;
 							}
@@ -310,6 +325,7 @@ export class StravaService {
 				await writeFile(cacheListFile, JSON.stringify(payload, null, 1), 'utf8');
 				await this.cleanupOldActivityBackups();
 			} else if (checkForNewer && checkForNewer !== 'false') {
+				progress?.('Checking Strava for newer activities…');
 				if (payload.length > 0 && payload[0].start_date) {
 					try {
 						last = Math.floor(new Date(payload[0].start_date).getTime() / 1000);
@@ -317,7 +333,7 @@ export class StravaService {
 						logger.error("Could not parse start_date for last timestamp", e);
 					}
 				}
-				payload = await this.getTrackListPage({ token, trackList: payload, fromStamp: last });
+				payload = await this.getTrackListPage({ token, trackList: payload, fromStamp: last, progress });
 				payload.sort((a, b) => b.start_date_local.localeCompare(a.start_date_local));
 				payload = payload.filter((e, i, a) => e?.id !== a[i - 1]?.id);
 
@@ -330,6 +346,7 @@ export class StravaService {
 			}
 
 			logger.info("Number of activities available:", payload.length);
+			progress?.(`Filtering ${payload.length} activities and loading track data…`);
 			const { trackData, activities, activityProcessCounts } = await this.filterAndProcessActivities({
 				token,
 				payload,
@@ -339,11 +356,13 @@ export class StravaService {
 				fromStamp: fromStamp ? Number(fromStamp) : undefined,
 				toStamp: toStamp ? Number(toStamp) : undefined,
 				tolerance: effectiveTolerance ?? undefined,
-				dedup
+				dedup,
+				progress
 			});
 
 			activityProcessCounts.noDataTracks = (activityProcessCounts.noDataTracks || 0) + noDataTracks;
 			const rateLimitReached = this.isRateLimitReached();
+			progress?.('Activity data loaded. Preparing results…');
 			activityProcessCounts.rateLimitReached = rateLimitReached;
 
 			const kmlTrack = printKml.head("tracks") + trackData + printKml.tail(config.default_latitude, config.default_longitude);
@@ -362,7 +381,8 @@ export class StravaService {
 		fromStamp,
 		toStamp,
 		tolerance,
-		dedup
+		dedup,
+		progress
 	}: {
 		token?: string;
 		payload: StravaActivity[];
@@ -373,6 +393,7 @@ export class StravaService {
 		toStamp?: number;
 		tolerance?: number | null;
 		dedup?: boolean | string;
+		progress?: (message: string) => void;
 	}): Promise<{
 		trackData: string;
 		activities: StravaActivity[];
@@ -425,10 +446,13 @@ export class StravaService {
 			activityProcessCounts.afterDedup = desiredActivities.length;
 		}
 
+		let processed = 0;
 		await Promise.all(desiredActivities.map(async (activity) => {
 			if (!error) {
 				try {
-					let trackData = await this.processActivity(activity, token, false, tolerance ?? undefined);
+					const activityNumber = ++processed;
+					progress?.(`Processing activity ${activityNumber} of ${desiredActivities.length}: ${activity.name}`);
+					let trackData = await this.processActivity(activity, token, false, tolerance ?? undefined, progress);
 					if (trackData === 'NO DATA') {
 						noDataTracks++;
 					} else if (trackData) {
@@ -572,6 +596,7 @@ export async function getCurrentAthleteId(accessToken: string): Promise<number |
 }
 
 export const dedupStravaDuplicates = (arr: StravaActivity[]): { filteredList: StravaActivity[]; removalLogs: any[] } => {
+	const shortItems = arr.filter(item => item.elapsed_time < 400);
 	const validItems = arr.filter(item => item.elapsed_time >= 400);
 	const sorted = [...validItems].sort((a, b) => new Date(a.start_date).getTime() - new Date(b.start_date).getTime());
 
@@ -594,7 +619,7 @@ export const dedupStravaDuplicates = (arr: StravaActivity[]): { filteredList: St
 	});
 	if (currentCluster.length > 0) clusters.push(currentCluster);
 
-	const filteredList: StravaActivity[] = [];
+	const filteredList: StravaActivity[] = [...shortItems];
 	const removalLogs: any[] = [];
 
 	clusters.forEach((cluster) => {

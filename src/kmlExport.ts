@@ -1,7 +1,14 @@
+const escapeXml = (value: unknown): string => String(value)
+	.replace(/&/g, '&amp;')
+	.replace(/</g, '&lt;')
+	.replace(/>/g, '&gt;')
+	.replace(/"/g, '&quot;')
+	.replace(/'/g, '&apos;');
+
 export const placemark = (name: string, coordinates: string): string => {
 	return `
       <Placemark>
-        <name>${name}</name>
+	        <name>${escapeXml(name)}</name>
                 <open>1</open>
                 <styleUrl>#theStyle</styleUrl>
                 <LineString><tessellate>1</tessellate>
