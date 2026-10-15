@@ -286,7 +286,7 @@ app.get('/process', async (request: Request, response: Response) => {
 		const showHulls = opts?.showHulls === 'true';
 		const fileList = activities.map(activity => defaultStravaService.getCacheFileFromActivity(activity));
 		if (jobId) jobProgress.set(jobId, showHulls ? 'Calculating activity hulls and spatial relationships…' : 'Preparing the map and track files…');
-		const hulls = showHulls ? getSpatialAnalysis(fileList, 0.11, tolerance) : null;
+		const hulls = showHulls ? await getSpatialAnalysis(fileList, 0.11, tolerance, jobId ? (message) => jobProgress.set(jobId, message) : undefined) : null;
 		const hullsGeoJson = hulls?.geoJSON;
 		const kmlTrack = data.kmlTrack;
 

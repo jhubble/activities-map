@@ -36,15 +36,16 @@ function initializeFormState() {
 		const jobId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 		params.set('jobId', jobId);
 		showProcessingStatus(actionUrl.pathname === '/stats' ? 'Starting detailed stats…' : 'Starting map generation…');
+		let pollingActive = true;
 		const statusTimer = window.setInterval(async () => {
 			try {
 				const statusResponse = await fetch(`/progress/${encodeURIComponent(jobId)}`, { cache: 'no-store' });
-				if (statusResponse.ok) {
+				if (pollingActive && statusResponse.ok) {
 					const status = await statusResponse.json();
-					showProcessingStatus(status.message);
+					if (pollingActive) showProcessingStatus(status.message);
 				}
 			} catch (_error) {
-				showProcessingStatus('Still working…');
+				if (pollingActive) showProcessingStatus('Still working…');
 			}
 		}, 700);
 		fetch(`${actionUrl.pathname}?${params.toString()}`)
@@ -57,12 +58,15 @@ function initializeFormState() {
 				return body;
 			})
 			.then((html) => {
+				pollingActive = false;
 				window.clearInterval(statusTimer);
+				document.getElementById('processingStatus')?.remove();
 				document.open();
 				document.write(html);
 				document.close();
 			})
 			.catch((error) => {
+				pollingActive = false;
 				window.clearInterval(statusTimer);
 				showProcessingStatus(`Unable to finish: ${error.message}. Please try again.`);
 			});
